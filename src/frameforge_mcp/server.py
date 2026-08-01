@@ -23,7 +23,11 @@ from frameforge_mcp.descriptions import (
     _DESC_COACH_PAINT,
     _DESC_COACH_STYLE,
     _DESC_DETECTORS,
+    _DESC_FONT_CLOSURE,
+    _DESC_FONT_GENERICS,
     _DESC_MAX_PAGES,
+    _DESC_MIGRATE_APPLY,
+    _DESC_MIGRATE_YAML,
     _DESC_PAGES,
     _DESC_RASTER,
     _DESC_REAL_METRICS,
@@ -92,6 +96,8 @@ from frameforge_mcp.usecases import (
     propose_from_svg as _uc_propose_from_svg,
     render_frameforge_yaml as _uc_render_frameforge_yaml,
     design_audit as _uc_design_audit,
+    list_deprecated_forms as _uc_list_deprecated_forms,
+    migrate_deprecated_forms as _uc_migrate_deprecated_forms,
     run_sdk_client as _uc_run_sdk_client,
     run_sdk_code as _uc_run_sdk_code,
 )
@@ -119,6 +125,8 @@ from frameforge_mcp.sessions import (
 )
 from frameforge_mcp.usecases import (
     fit_text as fit_text,
+    list_deprecated_forms as list_deprecated_forms,
+    migrate_deprecated_forms as migrate_deprecated_forms,
     compare_images as compare_images,
     construct_vectors as construct_vectors,
     detect_regions as detect_regions,
@@ -398,6 +406,12 @@ def create_server(
             "an invisible shape is the one defect a screenshot cannot show you); "
             "v0.1-dialect documents migrate via tooling/codemod.py --from-v01, and "
             "inert stroke declarations via --fix-inert-stroke.\n"
+            "• Deprecated forms: list_deprecated_forms (the registry — what each retired "
+            "spelling became, and whether it still validates) and migrate_deprecated_forms "
+            "(rewrites them; `apply: true` returns the migrated YAML). Run these FIRST when a "
+            "document is rejected for a `stroke` or `size` key — both were removed by the "
+            "contract, so such a document can never reach a render, and the fix is "
+            "mechanical.\n"
             "• Image → draft: propose_from_image / propose_from_document / propose_from_svg "
             "(UNVERIFIED drafts, round-tripped through render).\n"
             "• Visual QA: compare_images (zoomed reference|candidate|diff panels + real "
@@ -435,6 +449,44 @@ def create_server(
             "Call the `frameforge_guide` prompt for the full SDK + workflow reference."
         ),
     )
+
+    @server.tool()
+    def list_deprecated_forms():
+        """List every DEPRECATED FrameForge form and the current spelling that replaces it.
+
+        Read this before hand-fixing a document that will not validate. Branch on
+        `valid_at_head`: a `legacy-key` still parses, a `removed-form` does not.
+        `fix: automatic` means `migrate_deprecated_forms` handles it for you.
+        """
+        return _plain_tool_result(_logged_call(
+            log_path,
+            "list_deprecated_forms",
+            {},
+            lambda: _enveloped("list_deprecated_forms", _uc_list_deprecated_forms),
+        ))
+
+    @server.tool()
+    def migrate_deprecated_forms(
+        yaml_text: Annotated[str, Field(description=_DESC_MIGRATE_YAML)],
+        apply: Annotated[bool, Field(description=_DESC_MIGRATE_APPLY)] = False,
+    ):
+        """Report — and optionally rewrite — deprecated forms in a FrameForge document.
+
+        Run this FIRST when a document is rejected for a `stroke` or `size` key:
+        both were removed by the contract, so such a document can never reach
+        `render_frameforge_yaml`, and the rewrite is mechanical. Reports only by
+        default; pass `apply: true` for `migrated_yaml`. Never renders, never
+        writes to a session.
+        """
+        return _plain_tool_result(_logged_call(
+            log_path,
+            "migrate_deprecated_forms",
+            {"apply": apply},
+            lambda: _enveloped(
+                "migrate_deprecated_forms",
+                lambda: _uc_migrate_deprecated_forms(yaml_text, apply=apply),
+            ),
+        ))
 
     @server.tool()
     def list_sdk_clients():
@@ -532,6 +584,10 @@ def create_server(
         to: Annotated[str, Field(description=_DESC_TO)] = "png",
         scale: Annotated[float, Field(description=_DESC_SCALE)] = 1.0,
         real_metrics: Annotated[bool | str, Field(description=_DESC_REAL_METRICS)] = "auto",
+        font_closure: Annotated[str | None, Field(description=_DESC_FONT_CLOSURE)] = None,
+        font_generics: Annotated[
+            dict[str, str] | None, Field(description=_DESC_FONT_GENERICS)
+        ] = None,
         reference: Annotated[
             str | None,
             Field(description="Optional reference image (path, frameforge:// URI, or data:image URI) to diff the rendered page 1 against: the result gains reference_diff with per-object ghost vectors — each authored object's displacement toward its best match in the reference — so corrections are typed from numbers instead of eyeballed off an overlay."),
@@ -564,6 +620,8 @@ def create_server(
                 "to": to,
                 "scale": scale,
                 "real_metrics": real_metrics,
+                "font_closure": font_closure,
+                "font_generics": font_generics,
                 "reference": reference,
             },
             lambda: _enveloped("run_sdk_client", lambda: _uc_run_sdk_client(
@@ -581,6 +639,8 @@ def create_server(
                 to=to,
                 scale=scale,
                 real_metrics=real_metrics,
+                font_closure=font_closure,
+                font_generics=font_generics,
                 reference=reference,
                 publish=publish,
                 repo_root=repo,
@@ -606,6 +666,10 @@ def create_server(
         to: Annotated[str, Field(description=_DESC_TO)] = "png",
         scale: Annotated[float, Field(description=_DESC_SCALE)] = 1.0,
         real_metrics: Annotated[bool | str, Field(description=_DESC_REAL_METRICS)] = "auto",
+        font_closure: Annotated[str | None, Field(description=_DESC_FONT_CLOSURE)] = None,
+        font_generics: Annotated[
+            dict[str, str] | None, Field(description=_DESC_FONT_GENERICS)
+        ] = None,
         reference: Annotated[
             str | None,
             Field(description="Optional reference image (path, frameforge:// URI, or data:image URI) to diff the rendered page 1 against: the result gains reference_diff with per-object ghost vectors — each authored object's displacement toward its best match in the reference — so corrections are typed from numbers instead of eyeballed off an overlay."),
@@ -637,6 +701,8 @@ def create_server(
                 "to": to,
                 "scale": scale,
                 "real_metrics": real_metrics,
+                "font_closure": font_closure,
+                "font_generics": font_generics,
                 "reference": reference,
             },
             lambda: _enveloped("run_sdk_code", lambda: _uc_run_sdk_code(
@@ -653,6 +719,8 @@ def create_server(
                 to=to,
                 scale=scale,
                 real_metrics=real_metrics,
+                font_closure=font_closure,
+                font_generics=font_generics,
                 reference=reference,
                 publish=publish,
             )),
@@ -675,6 +743,10 @@ def create_server(
         to: Annotated[str, Field(description=_DESC_TO)] = "png",
         scale: Annotated[float, Field(description=_DESC_SCALE)] = 1.0,
         real_metrics: Annotated[bool | str, Field(description=_DESC_REAL_METRICS)] = "auto",
+        font_closure: Annotated[str | None, Field(description=_DESC_FONT_CLOSURE)] = None,
+        font_generics: Annotated[
+            dict[str, str] | None, Field(description=_DESC_FONT_GENERICS)
+        ] = None,
         reference: Annotated[
             str | None,
             Field(description="Optional reference image (path, frameforge:// URI, or data:image URI) to diff the rendered page 1 against: the result gains reference_diff with per-object ghost vectors — each authored object's displacement toward its best match in the reference — so corrections are typed from numbers instead of eyeballed off an overlay."),
@@ -705,6 +777,8 @@ def create_server(
                 "to": to,
                 "scale": scale,
                 "real_metrics": real_metrics,
+                "font_closure": font_closure,
+                "font_generics": font_generics,
                 "reference": reference,
             },
             lambda: _enveloped("render_frameforge_yaml", lambda: _uc_render_frameforge_yaml(
@@ -720,6 +794,8 @@ def create_server(
                 to=to,
                 scale=scale,
                 real_metrics=real_metrics,
+                font_closure=font_closure,
+                font_generics=font_generics,
                 reference=reference,
                 publish=publish,
             )),
@@ -1776,6 +1852,10 @@ def create_server(
             bool | str,
             Field(description="True/False or 'auto'; use the same value for rendering and overflow checks."),
         ] = "auto",
+        font_closure: Annotated[str | None, Field(description=_DESC_FONT_CLOSURE)] = None,
+        font_generics: Annotated[
+            dict[str, str] | None, Field(description=_DESC_FONT_GENERICS)
+        ] = None,
     ):
         """Measure text and return a line-breaker-safe positioned box width.
 
@@ -1792,8 +1872,12 @@ def create_server(
                 "font_size": font_size,
                 "bold": bold,
                 "real_metrics": real_metrics,
+                "font_closure": font_closure,
+                "font_generics": font_generics,
             },
-            lambda: _uc_fit_text(text, font_family, font_size, bold, real_metrics),
+            lambda: _uc_fit_text(
+                text, font_family, font_size, bold, real_metrics,
+                font_closure, font_generics),
         ))
 
     @server.tool()

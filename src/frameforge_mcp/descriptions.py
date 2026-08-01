@@ -92,6 +92,16 @@ _DESC_REAL_METRICS = (
     "advances via fontTools when it is installed), true (force real metrics), or false "
     "(per-character estimate). The resolved mode is reported as result.real_metrics."
 )
+_DESC_FONT_CLOSURE = (
+    "Optional path to a frameforge-fonts .fp closure. When present, validation, SVG/HTML "
+    "rendering, diagnostics, and text fitting shape against the exact SHA-256-pinned font "
+    "bytes; this outranks real_metrics and reports metrics_mode='closure'. Relative paths "
+    "resolve from the document/client base directory and obey FRAMEFORGE_MCP_INPUT_ROOTS."
+)
+_DESC_FONT_GENERICS = (
+    "Optional mapping from CSS generic names to concrete families pinned in font_closure, "
+    "for example {'sans-serif': 'Inter'}. Concrete families always win."
+)
 _DESC_TOPIC = (
     "Optional capability topic: omit for the compact index (object types, flowable types, inline "
     "kinds, canvas presets, profiles, tools); or one of 'flowables' | 'inlines' | 'style' | "
@@ -113,4 +123,18 @@ _DESC_REGION_TUNABLES = (
     "fill_erode (reclassify thin strokes as 'outline')}. "
     "consensus: {sigmas: [..], levels: [..], agree (fraction), harmonics (Fourier low-pass per "
     "loop), min_area}."
+)
+
+
+_DESC_MIGRATE_YAML = (
+    "The FrameForge document to inspect, as YAML or JSON text. It does NOT have to be "
+    "valid: two of the deprecated forms (the pre-P3 inline `stroke` bundle and the pre-P4 "
+    "`size` object) are rejected by the contract, so a document carrying them is exactly "
+    "the input this tool exists for."
+)
+
+_DESC_MIGRATE_APPLY = (
+    "false (default) reports only. true also returns result.migrated_yaml — the document "
+    "with every auto-migratable form rewritten. The rewrite is idempotent and never "
+    "touches a session; result.manual lists what was deliberately left for a human."
 )

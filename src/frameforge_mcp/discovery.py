@@ -360,7 +360,7 @@ def describe_capabilities(
             # carry those defaults come from the engine's single constant — never
             # restate them here (drift-map CRITICAL #2: this literal once named
             # two of the five).
-            from frameforge.rendering.domain.services.text_style_resolver import (
+            from frameforge_render.domain.services.text_style_resolver import (
                 RESERVED_STYLES,
             )
             result["reserved_styles"] = {

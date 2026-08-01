@@ -10,6 +10,7 @@ budget forbids.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import os
@@ -18,8 +19,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from frameforge.rendering.provenance import sign_svg, utc_now_iso
 from frameforge.conform import render_pages_with_stats
+from frameforge_render.provenance import sign_svg, utc_now_iso
 from frameforge_sdk.io import parse
 from frameforge_sdk.validate import validate_static_rules
 
@@ -32,6 +33,7 @@ from frameforge_mcp.config import (
     _positive_env,
 )
 from frameforge_mcp.results import _render_failure, _resource_links, _validation_payload
+from frameforge_mcp.security import _assert_input_path_allowed
 from frameforge_mcp.util import _page_svg_name, _sha256_text
 
 
@@ -54,6 +56,8 @@ def _validate_and_render_yaml(
     to: str = "png",
     scale: float = 1.0,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if to not in ("png", "pdf", "html"):
         return {
@@ -67,7 +71,15 @@ def _validate_and_render_yaml(
             "resources": _resource_links(session_id, renders=[]),
         }
     metrics_on = _resolve_real_metrics(real_metrics)
+    metrics_provider = None
+    closure_info = None
     try:
+        metrics_provider, closure_info = _font_closure_metrics(
+            font_closure,
+            base_dir=base_dir,
+            store_root=session_dir / "font-store",
+            generics=font_generics,
+        )
         document = parse(yaml_text, validate=False, forgiving=False)
         if isinstance(document, dict) and ((document.get("defs") or {}).get("params")):
             # defs.params: resolve "=expr" strings BEFORE model validation —
@@ -80,7 +92,11 @@ def _validate_and_render_yaml(
             # render path; the judgement itself is the caller's (advisory).
             from frameforge_coach import to_silhouette
             document = to_silhouette(document)
-        report = validate_static_rules(document, real_metrics=metrics_on)
+        report = validate_static_rules(
+            document,
+            real_metrics=metrics_on,
+            metrics_provider=metrics_provider,
+        )
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
@@ -105,7 +121,8 @@ def _validate_and_render_yaml(
             return _render_failure(session_id, report, oversized, warning=oversized)
         try:
             svgs, text_stats, render_diagnostics = _render_page_svgs_bounded(
-                document, base_dir, real_metrics=metrics_on)
+                document, base_dir, real_metrics=metrics_on,
+                metrics_provider=metrics_provider)
         except RenderTimeoutError as exc:
             return _render_failure(session_id, report, str(exc), warning=str(exc))
         except Exception as exc:  # noqa: BLE001 — render is third-party-ish; surface it structured
@@ -161,7 +178,8 @@ def _validate_and_render_yaml(
 
         if to == "html":
             html_entry, html_summary, html_warning = _export_html(
-                document, session_dir, session_id, base_dir, real_metrics)
+                document, session_dir, session_id, base_dir, real_metrics,
+                metrics_provider=metrics_provider)
             if html_entry:
                 renders.append(html_entry)
             html_summary_out = html_summary
@@ -237,7 +255,7 @@ def _validate_and_render_yaml(
         # since an estimate-mode overlap is unverified (PALS's Law).
         collisions = (render_diagnostics or {}).get("collisions") or []
         if collisions:
-            from frameforge.rendering.application.audit import name_collision
+            from frameforge_render.application.audit import name_collision
             mode = collisions[0].get("metrics", "estimate")
             # One naming rule across CLI/audit/MCP: ids when authored, else the
             # text excerpts — never "<anonymous> × <anonymous>", which is a nag
@@ -279,8 +297,15 @@ def _validate_and_render_yaml(
         "validation": _validation_payload(report),
         "renders": renders,
         "resources": _resource_links(session_id, renders=renders),
-        "real_metrics": metrics_on,
+        "real_metrics": metrics_provider is not None or metrics_on,
+        "metrics_mode": (
+            "closure" if metrics_provider is not None
+            else "real" if metrics_on
+            else "estimate"
+        ),
     }
+    if closure_info is not None:
+        result["font_closure"] = closure_info
     if text_fit is not None:
         result["text_fit"] = text_fit
     if design_census is not None:
@@ -348,9 +373,54 @@ def _resolve_real_metrics(value: bool | str | None) -> bool:
     return importlib.util.find_spec("fontTools") is not None
 
 
+def _font_closure_metrics(
+    font_closure: str | None,
+    *,
+    base_dir: Path,
+    store_root: Path,
+    generics: dict[str, str] | None = None,
+):
+    """Load a confined ``.fp`` and return its provider plus result metadata."""
+    if font_closure is None:
+        return None, None
+    if not isinstance(font_closure, str) or not font_closure.strip():
+        raise ValueError("font_closure must be a non-empty .fp path")
+    if generics is not None and (
+        not isinstance(generics, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in generics.items())
+    ):
+        raise ValueError("font_generics must map generic family names to pinned family names")
+
+    path = Path(font_closure).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    path = path.resolve()
+    _assert_input_path_allowed(str(path))
+    if path.suffix.lower() != ".fp":
+        raise ValueError("font_closure must point to a .fp closure")
+    if not path.is_file():
+        raise FileNotFoundError(f"font closure does not exist: {path}")
+
+    from frameforge_sdk import closure_metrics
+    provider = closure_metrics(
+        path,
+        store_root=store_root,
+        strict=True,
+        generics=generics,
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return provider, {
+        "path": str(path),
+        "sha256": digest,
+        "strict": True,
+        "generics": dict(generics or {}),
+    }
+
+
 def _export_html(
     document: Any, session_dir: Path, session_id: str, base_dir: Path,
     real_metrics: bool | str = "auto",
+    *, metrics_provider=None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any], str | None]:
     """Write the document as one self-contained ``document.html``.
 
@@ -369,7 +439,8 @@ def _export_html(
     from frameforge.conform import render_html
     try:
         text = render_html(document, base_dir=str(base_dir),
-                           real_metrics=_resolve_real_metrics(real_metrics))
+                           real_metrics=_resolve_real_metrics(real_metrics),
+                           metrics_provider=metrics_provider)
     except Exception as exc:  # noqa: BLE001 — never kill an otherwise-good render
         summary = {
             "ok": False,
@@ -505,7 +576,7 @@ def _design_census(document: Any, svgs: list[str],
     one, so without it the census cannot count an invisible object.
     """
     try:
-        from frameforge.rendering.application.audit import audit_document, compact_census
+        from frameforge_render.application.audit import audit_document, compact_census
         doc_dict = (document.model_dump(by_alias=True, exclude_none=True)
                     if hasattr(document, "model_dump") else document)
         return compact_census(audit_document(doc_dict, list(svgs),
@@ -515,7 +586,8 @@ def _design_census(document: Any, svgs: list[str],
 
 
 def _render_page_svgs_bounded(
-    document: Any, base_dir: Path, *, real_metrics: bool = False
+    document: Any, base_dir: Path, *, real_metrics: bool = False,
+    metrics_provider=None,
 ) -> tuple[list[str], dict[str, int], dict[str, Any]]:
     """Render page SVGs (+ telemetry) under :data:`DEFAULT_RENDER_TIMEOUT_SECONDS`.
 
@@ -531,7 +603,9 @@ def _render_page_svgs_bounded(
 
     def _target() -> None:
         try:
-            box["value"] = _render_pages_with_stats(document, base_dir, real_metrics=real_metrics)
+            box["value"] = _render_pages_with_stats(
+                document, base_dir, real_metrics=real_metrics,
+                metrics_provider=metrics_provider)
         except BaseException as exc:  # noqa: BLE001 — re-raised on the calling thread
             box["error"] = exc
 
@@ -548,7 +622,8 @@ def _render_page_svgs_bounded(
 
 
 def _render_pages_with_stats(
-    document: Any, base_dir: Path, *, real_metrics: bool
+    document: Any, base_dir: Path, *, real_metrics: bool,
+    metrics_provider=None,
 ) -> tuple[list[str], dict[str, int], dict[str, Any]]:
     """Render page SVGs + telemetry through the SDK conformance path.
 
@@ -561,7 +636,8 @@ def _render_pages_with_stats(
     tool argument.
     """
     return render_pages_with_stats(
-        document, base_dir=str(base_dir), real_metrics=real_metrics, diagnostics=True)
+        document, base_dir=str(base_dir), real_metrics=real_metrics,
+        metrics_provider=metrics_provider, diagnostics=True)
 
 
 def _render_timeout() -> float:
@@ -701,7 +777,7 @@ class _RasterBackendUnavailable(RuntimeError):
 def _raster_chromium(svg: str, out_path: Path, base_dir: Path, scale: float) -> None:
     """Rasterize via headless Chromium; mark the backend absent if it cannot run."""
     try:
-        from frameforge.rendering.infrastructure.browser import (
+        from frameforge_render.infrastructure.browser import (
             BrowserRendererUnavailable,
             rasterize_svg,
         )
@@ -716,7 +792,7 @@ def _raster_chromium(svg: str, out_path: Path, base_dir: Path, scale: float) -> 
 def _raster_cairo(svg: str, out_path: Path, base_dir: Path, scale: float) -> None:
     """Rasterize via CairoSVG (browser-free fallback); mark absent if unavailable."""
     try:
-        from frameforge.rendering.infrastructure.cairo import (
+        from frameforge_render.infrastructure.cairo import (
             CairoRendererUnavailable,
             rasterize_svg_cairo,
         )
@@ -772,7 +848,7 @@ def _apply_post_to_pngs(
     Each processed entry is re-written on disk, its ``bytes`` refreshed, and
     annotated with ``post_effects`` (the applied names in application order) so
     the caller can see the raster was post-processed."""
-    from frameforge.rendering.infrastructure.raster_post import (
+    from frameforge_render.infrastructure.raster_post import (
         apply_post_effects, effect_names,
     )
 

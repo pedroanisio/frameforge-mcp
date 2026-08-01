@@ -44,12 +44,28 @@ would assert a dependency that does not exist.
   diagnostics — text fit, layout overflow, ink collisions, legibility (type
   below the legible floor, WCAG contrast), paint intent, design-token census.
   A render that succeeded but produced something unreadable says so.
+- **Portable font evidence**: `run_sdk_code`, `run_sdk_client`,
+  `render_frameforge_yaml`, and `fit_text` accept a `.fp` `font_closure` plus
+  optional `font_generics`. Validation and rendering share the same strict
+  provider and report `metrics_mode: closure` with the closure SHA-256.
 - **Visual QA**: real NCC/RMSE/MAE metrics between a reference and a candidate.
 - **Raster → vector**: a coordinate-aware reconstruction workspace — measure,
   mark, overlay, fit primitives, vectorize, score.
 - **Image → draft**: propose documents from images, PDFs, or SVGs. Every
   proposal is unverified CV/VLM output and is round-tripped through a render
   before it is shown.
+- **Deprecated forms**: `list_deprecated_forms` returns the contract's
+  registry — what each retired spelling became, and whether it still validates —
+  and `migrate_deprecated_forms` rewrites them, returning the migrated YAML with
+  `apply: true`.
+
+  These run *before* a render, and that ordering is the point. Two of the
+  deprecated forms (the pre-P3 inline `stroke` bundle, the pre-P4 `size` object)
+  are **rejected** by the contract, so a document carrying one can never reach
+  `render_frameforge_yaml` at all — an agent holding it gets "does not validate"
+  and no route forward. The rewrite is mechanical, so this is that route.
+  Neither tool renders, and neither touches a session; the migration does not
+  mutate its input and is idempotent.
 
 ## PALS's Law
 
@@ -68,20 +84,19 @@ pip install 'frameforge-mcp[pdf]'      # PDF input for propose_from_document
 pip install 'frameforge-mcp[browser]'  # headless Chromium raster
 ```
 
-The base install renders through CairoSVG, so a vision model can see — and
-therefore verify — a render with no browser present.
+The base install includes `frameforge-sdk[metrics]` and renders through
+CairoSVG, so closure metrics and browser-free visual verification work without
+another extra.
 
 ## Provenance
 
-Every module under `src/` is extracted verbatim from the
-[frameforge](https://github.com/pedroanisio/frameforge) monorepo by
-`tooling/extract_mcp.py`, which repoints intra-distribution module names and
-nothing else. To re-sync:
+Since the 2026-08-01 cutover this repository is the MCP source of truth. The
+former extraction script is historical; the monorepo depends on this package
+in its dev group and no longer owns a second MCP implementation.
 
-```bash
-make extract        # re-derive src/ from the monorepo
-make extract-check  # GATE: fail if the committed tree drifted
-```
+See [MIGRATION.md](MIGRATION.md) and
+[`examples/font_closure_tool_call.json`](examples/font_closure_tool_call.json)
+for the portable closure call shape.
 
 ## Licence
 

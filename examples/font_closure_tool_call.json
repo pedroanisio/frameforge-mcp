@@ -1,0 +1,19 @@
+{
+  "tool": "render_frameforge_yaml",
+  "arguments": {
+    "session_id": "closure-example",
+    "raster_png": false,
+    "to": "html",
+    "font_closure": "/workspace/fonts/book.fp",
+    "font_generics": {
+      "sans-serif": "Inter"
+    },
+    "yaml_text": "dsl: FrameForge\nversion: 2.2.0\ntitle: Closure example\npages:\n  - mode: page\n    id: p1\n    canvas: {size: [320, 120], units: px}\n    layers:\n      - id: content\n        objects:\n          - type: text\n            id: copy\n            box: [20, 30, 280, 40]\n            text: Portable measurement\n            style: {font_family: Inter, font_size: 18}\n"
+  },
+  "expected": {
+    "ok": true,
+    "metrics_mode": "closure",
+    "diagnostics.metrics_mode": "closure",
+    "font_closure.sha256": "<64 hex characters>"
+  }
+}

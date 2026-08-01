@@ -5,6 +5,25 @@ speaks is `frameforge_api.HEAD_VERSION`, which moves on its own schedule.*
 
 ---
 
+## Unreleased
+
+### Added
+
+- Added `font_closure` and `font_generics` to all three render tools and
+  `fit_text`. Paths obey `FRAMEFORGE_MCP_INPUT_ROOTS`; relative render paths
+  resolve from the document/client base directory.
+- Validation, SVG, HTML, diagnostics, and author-time fitting share one strict
+  closure provider. Results report `metrics_mode`, closure SHA-256, path,
+  generic aliases, and strictness.
+- The default install now depends on `frameforge-sdk[metrics]`, so the advertised
+  capability does not require an undisclosed extra.
+- Added a migration guide and complete JSON tool-call example.
+
+### Changed
+
+- Renderer imports follow the standalone `frameforge_render` boundary after
+  the monorepo engine cutover.
+
 ## 1.0.0 — extraction from the monorepo (2026-08-01)
 
 The agent-facing surface of FrameForge as its own distribution. `src/frameforge/{mcp,coach,live}`

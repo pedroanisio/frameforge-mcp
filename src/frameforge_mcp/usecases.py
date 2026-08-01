@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import math
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,8 @@ def fit_text(
     font_size: float,
     bold: bool = False,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Measure text and return the box width the FrameForge breaker accepts."""
     if not isinstance(text, str):
@@ -58,16 +61,24 @@ def fit_text(
         raise ValueError("font_family must be a family string or non-empty fallback list")
     if float(font_size) <= 0:
         raise ValueError("font_size must be positive")
-    from frameforge_mcp.pipeline import _resolve_real_metrics
     from frameforge_sdk.metrics import fit_width, measure_text
 
+    from frameforge_mcp.pipeline import _font_closure_metrics, _resolve_real_metrics
+
     metrics_on = _resolve_real_metrics(real_metrics)
+    metrics_provider, closure_info = _font_closure_metrics(
+        font_closure,
+        base_dir=Path.cwd(),
+        store_root=Path(tempfile.gettempdir()) / "frameforge-mcp-font-store",
+        generics=font_generics,
+    )
     measured = measure_text(
         text,
         font_family=font_family,
         font_size=float(font_size),
         bold=bool(bold),
         real_metrics=metrics_on,
+        metrics_provider=metrics_provider,
     )
     safe = fit_width(
         text,
@@ -75,18 +86,27 @@ def fit_text(
         font_size=float(font_size),
         bold=bool(bold),
         real_metrics=metrics_on,
+        metrics_provider=metrics_provider,
     )
-    return {
+    result = {
         "ok": True,
         "text": text,
         "font_family": font_family,
         "font_size": float(font_size),
         "bold": bool(bold),
-        "real_metrics": metrics_on,
+        "real_metrics": metrics_provider is not None or metrics_on,
+        "metrics_mode": (
+            "closure" if metrics_provider is not None
+            else "real" if metrics_on
+            else "estimate"
+        ),
         "measured_width": measured,
         "fit_width": safe,
         "tolerance": safe - measured,
     }
+    if closure_info is not None:
+        result["font_closure"] = closure_info
+    return result
 
 
 def _session_replacement_info(session_dir: Path, tool: str) -> dict[str, Any] | None:
@@ -134,6 +154,8 @@ def _run_source(
     to: str = "png",
     scale: float = 1.0,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
     reference: str | None = None,
     publish: bool = False,
     tool: str | None = None,
@@ -177,6 +199,8 @@ def _run_source(
             to=to,
             scale=scale,
             real_metrics=real_metrics,
+            font_closure=font_closure,
+            font_generics=font_generics,
         )
         result.update(rendered)
         if rendered.get("renders"):
@@ -210,6 +234,8 @@ def run_sdk_code(
     to: str = "png",
     scale: float = 1.0,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
     reference: str | None = None,
     publish: bool = False,
 ) -> dict[str, Any]:
@@ -236,7 +262,9 @@ def run_sdk_code(
     return _run_source(
         source, max_pages=max_pages, raster_png=raster_png, pages=pages,
         sign=sign, signed_at=signed_at, silhouette=silhouette,
-        to=to, scale=scale, real_metrics=real_metrics, reference=reference,
+        to=to, scale=scale, real_metrics=real_metrics,
+        font_closure=font_closure, font_generics=font_generics,
+        reference=reference,
         publish=publish,
         tool="run_sdk_code",
     )
@@ -258,6 +286,8 @@ def run_sdk_client(
     to: str = "png",
     scale: float = 1.0,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
     reference: str | None = None,
     publish: bool = False,
     repo_root: str | Path | None = None,
@@ -276,7 +306,9 @@ def run_sdk_client(
     return _run_source(
         source, max_pages=max_pages, raster_png=raster_png, pages=pages,
         sign=sign, signed_at=signed_at, silhouette=silhouette,
-        to=to, scale=scale, real_metrics=real_metrics, reference=reference,
+        to=to, scale=scale, real_metrics=real_metrics,
+        font_closure=font_closure, font_generics=font_generics,
+        reference=reference,
         tool="run_sdk_client",
     )
 
@@ -295,6 +327,8 @@ def render_frameforge_yaml(
     to: str = "png",
     scale: float = 1.0,
     real_metrics: bool | str = "auto",
+    font_closure: str | None = None,
+    font_generics: dict[str, str] | None = None,
     reference: str | None = None,
     publish: bool = False,
 ) -> dict[str, Any]:
@@ -305,7 +339,9 @@ def render_frameforge_yaml(
     return _run_source(
         source, max_pages=max_pages, raster_png=raster_png, pages=pages,
         sign=sign, signed_at=signed_at, silhouette=silhouette,
-        to=to, scale=scale, real_metrics=real_metrics, reference=reference,
+        to=to, scale=scale, real_metrics=real_metrics,
+        font_closure=font_closure, font_generics=font_generics,
+        reference=reference,
         tool="render_frameforge_yaml",
     )
 
@@ -327,7 +363,7 @@ def design_audit(
 
     import yaml as _yaml
 
-    from frameforge.rendering.application.audit import (
+    from frameforge_render.application.audit import (
         audit_document, compact_census, render_markdown, summary_line)
 
     sid = _session_id(session_id)
@@ -2471,3 +2507,79 @@ def match_font(
     }
     _write_diagnostics(session_dir, result)
     return result
+
+
+# --------------------------------------------------------------------------- #
+#  Deprecated FrameForge forms — lint and migrate                             #
+# --------------------------------------------------------------------------- #
+def migrate_deprecated_forms(
+    yaml_text: str,
+    *,
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Report — and optionally rewrite — deprecated FrameForge forms in a document.
+
+    Deliberately does NOT validate, render, or touch a session. Two of the
+    contract's deprecated forms (the pre-P3 inline ``stroke`` bundle and the
+    pre-P4 ``size`` object) are *rejected* by the models, so a document carrying
+    them cannot reach `render_frameforge_yaml` at all — a lint that required a
+    valid document could never report the two that matter most. This tool is the
+    step that comes first: it turns "this document does not validate and I do
+    not know why" into a rewritten document plus a list of what changed.
+
+    The registry and the rewrite belong to ``frameforge_api.deprecations``; this
+    is an adapter over them, not a third copy of the rules.
+
+    Returns ``findings`` always, and ``migrated_yaml`` only when ``apply`` is
+    true. ``manual`` lists what the codemod refused to guess at — a pre-P3
+    bundle beside a *named* ``stroke_style`` token (rewriting it would restyle
+    every other object that references it), or a ``dash`` contradicting an
+    explicit ``stroke_dasharray``. ``clean`` is true only when nothing is left
+    for a human, so it answers "is the migration finished".
+    """
+    import yaml as _yaml
+
+    from frameforge_api import DEPRECATIONS, migrate_document
+
+    if not isinstance(yaml_text, str) or not yaml_text.strip():
+        raise ValueError("yaml_text must be a non-empty string")
+    try:
+        data = _yaml.safe_load(yaml_text)
+    except Exception as exc:                                  # noqa: BLE001
+        raise ValueError(f"yaml_text is not parseable YAML/JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("yaml_text must describe a FrameForge document (a mapping)")
+
+    result = migrate_document(data)
+    payload: dict[str, Any] = {
+        "changed": result.changed,
+        "clean": not result.manual,
+        "findings": [f.as_dict() for f in result.findings],
+        "manual": [f.as_dict() for f in result.manual],
+        "registry_size": len(DEPRECATIONS),
+    }
+    if apply:
+        payload["migrated_yaml"] = _yaml.safe_dump(
+            result.document, sort_keys=False, allow_unicode=True)
+    return payload
+
+
+def list_deprecated_forms() -> dict[str, Any]:
+    """The deprecation registry: every retired FrameForge form and its replacement.
+
+    Read this before hand-fixing a document. ``valid_at_head`` is the field to
+    branch on — a ``legacy-key`` still parses (a validator normalises it), a
+    ``removed-form`` does not — and ``fix: automatic`` means
+    ``migrate_deprecated_forms(apply=true)`` handles it for you.
+
+    Nothing here can be *removed* before FrameForge 3.0: the contract declares
+    backward compatibility, so a form valid under an earlier 2.x revision stays
+    valid at HEAD. Deprecated means discouraged and migratable, not rejected.
+    """
+    from frameforge_api import CONTRACT_VERSION, deprecations
+
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "compatibility": "backward",
+        "deprecations": deprecations.registry_json(),
+    }

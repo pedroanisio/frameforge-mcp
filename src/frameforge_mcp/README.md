@@ -47,13 +47,19 @@ Render options (all three render tools): `to='pdf'` additionally assembles the r
 into a vector `document.pdf` via CairoSVG + pypdf (the `pdfout` group; the CLI `--to pdf`
 mechanism), reported under `result.pdf` and as a session resource. `to='html'` additionally
 writes a self-contained `document.html` (the CLI `--to html` mechanism, via
-`sdk.render_html`): semantic shell, inline SVG artwork, hoisted palette + text-style
+`frameforge.conform.render_html`): semantic shell, inline SVG artwork, hoisted palette + text-style
 classes, screen-reader landmark — no extra dependency, and full object-type parity with SVG
 because the same engine paints it. Both are reported by reference, never inlined. `scale` sets the PNG raster
 zoom (2.0 = double resolution — DPI control). `real_metrics` (`'auto'`|`true`|`false`, default
 `'auto'` = on when fontTools is installed) measures text with real glyph advances so
 wrap/shrink/ellipsis decisions match the rendered pixels; the resolved mode is reported as
-`result.real_metrics`. Every render also returns a `result.diagnostics` block (renderer
+`result.real_metrics`. Pass `font_closure='/path/book.fp'` to use exact
+SHA-256-pinned bytes instead; `font_generics={'sans-serif': 'Inter'}` maps CSS
+generics to concrete faces inside that closure. A closure outranks
+`real_metrics`, is strict by default, and reaches static validation, SVG/HTML,
+reports, and `fit_text`. Results include `result.metrics_mode == 'closure'`,
+`result.font_closure.sha256`, and the same value in
+`result.diagnostics.metrics_mode`. Every render also returns a `result.diagnostics` block (renderer
 `warnings`, `skipped_objects`, `skipped_flowables`, `font_fallbacks`, opt-in `layout`
 report) persisted into the session's `diagnostics.json` — nothing the renderer drops or
 substitutes is silent.
@@ -224,7 +230,7 @@ development rather than the running server.
 | `FRAMEFORGE_REPO` | Where the standalone `frameforge-sdk` looks for this engine's `tooling/validate.py`. Read by `frameforge_sdk.validate` when the engine is not pip-installed (an uninstalled checkout); unset, it resolves through the installed `frameforge` package and raises `EngineUnavailable` if neither is found. |
 | `FRAMEFORGE_MCP_SESSION_ROOT` | Where per-session scratch dirs/artifacts live (default: `frameforge-mcp-sessions` under the system temp dir). |
 | `FRAMEFORGE_MCP_EDIT_ROOTS` | `os.pathsep`-joined roots the client-file tools may read/write (default: `static/examples`). |
-| `FRAMEFORGE_MCP_INPUT_ROOTS` | Confine `propose_*` inputs to these roots (unset = any readable path). |
+| `FRAMEFORGE_MCP_INPUT_ROOTS` | Confine `propose_*` inputs and `font_closure` paths to these roots (unset = any readable path). Relative closure paths resolve from the document/client base directory. |
 | `FRAMEFORGE_MCP_KEEP_ENV` | Truthy keeps secret-looking env vars in the code subprocess (default: stripped). |
 | `FRAMEFORGE_SDK_PROVENANCE` | Set `0`/`false`/`off` to disable author-site capture in MCP SDK subprocesses (default: enabled there; disabled for ordinary SDK use). |
 | `FRAMEFORGE_MCP_STRUCT_LOG_PATH` | Path for the JSONL structured tool log (default: under the session root). |
@@ -239,7 +245,7 @@ development rather than the running server.
 | `FRAMEFORGE_MCP_MAX_RESOURCE_BYTES` | Byte cap for binary resource endpoints (default: the inline-blob cap derived from the result budget — 43500 at the stock 60000). |
 | `FRAMEFORGE_MCP_MIN_CLEANUP_AGE` | `cleanup_sessions` age floor, seconds — younger sessions are never pruned (default: 60). |
 | `FRAMEFORGE_MCP_PUBLISH_ROOT` | Durable root for published session deliverables; render tools accept `publish=true` and copy `document.fg.yaml`, pages, PDF, `diagnostics.json` + a sha256 manifest to `<root>/<session_id>/` (unset = publishing disabled; `publish=true` then fails fast). Must sit outside the session root; `cleanup_sessions` never touches it. |
-| `FRAMEFORGE_REAL_METRICS` | Truthy opts the shared SDK/validator/renderer default into real glyph advances (fontTools); unset means deterministic estimates, and an explicit per-call flag always wins. MCP render calls default to `real_metrics='auto'` (real when available) and report the resolved mode; use that same mode through `fit_text`. |
+| `FRAMEFORGE_REAL_METRICS` | Truthy opts the shared SDK/validator/renderer default into host-bound real glyph advances (fontTools); unset means deterministic estimates, and an explicit per-call flag wins unless `font_closure` supplies stronger byte-pinned evidence. |
 | `FRAMEFORGE_MATH_SVG` | `fallback` forces the deterministic math-glyph fallback instead of node MathJax. |
 | `FRAMEFORGE_CHROMIUM_NO_SANDBOX` | Truthy launches the raster Chromium with `--no-sandbox` (rootless Docker). |
 | `FRAMEFORGE_CHROMIUM_ARGS` | Replace the raster Chromium launch flags entirely (space-separated). |
