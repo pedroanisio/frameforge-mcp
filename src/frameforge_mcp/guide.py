@@ -89,8 +89,12 @@ Fluent builder:
     plus `parametric(fn, u=, v=)` and the bicubic patches `bezier_patch(net)` /
     `bspline_patch(net)` (4×4+ control grid → a tessellated `Scene3D`).
   - Geometry kernel (`frameforge_sdk.geometry`, CG-canon): `Mat3.reflect`/`mirror`; the
-    named viewing pipeline `window_to_viewport(window, viewport)` / `ViewingPipeline`
-    (the fit `Scene3D.render` uses); 2-D intersections (`segment_intersection`/
+    named viewing pipeline `window_to_viewport(window, viewport)` / `ViewingPipeline` —
+    the SDK's ONE pipeline, composed by `Scene3D.render`/`.wireframe` (pass it as
+    `pipeline=`, mutually exclusive with `camera=`). Stages: `clip_polyline`,
+    `clip_polygon`, `project_polygon`, `depth_key`, `is_back_face`, `fit`. Its
+    `project()` CLIPS segments crossing the near plane; `mode="points"` is the legacy
+    drop-the-vertex behaviour and is correct only for an unordered cloud; 2-D intersections (`segment_intersection`/
     `ray_segment_intersection`/`line_intersection`/`segment_polygon_intersections`),
     3-D intersections (`ray_plane_intersection`/`segment_plane_intersection`/
     `ray_triangle_intersection`) and curve×line (`segment_curve_intersections`/
@@ -111,8 +115,22 @@ Fluent builder:
     layers with dummy bends, median crossing minimization, and Brandes-Kopf
     coordinate assignment. OMG UML 2.5.1 XMI reference files and checksums live
     under `static/specs/uml-2.5.1/` and are not loaded on the render hot path.
-  - `Scene3D.render(shading=, cull_backfaces=, near_clip=)` — opt-in `near_clip=True`
-    Sutherland–Hodgman-clips faces straddling the near plane instead of dropping them.
+  - `Scene3D.render(shading=, cull_backfaces=, near_clip=, depth_sort=, pipeline=)` —
+    opt-in `near_clip=True` Sutherland–Hodgman-clips faces straddling the near plane
+    instead of dropping them.
+    - `shading=`: `none`; `flat` (alias `lambert`) one Lambert value per face; `smooth`
+      averaged vertex normals, still per-face; `phong` Blinn-Phong, also per-face;
+      `gouraud` the ONLY interpolating mode — a per-face linear-gradient Paint fitted to
+      the vertex intensities, exact on a triangle. (Before v1.1 `gouraud` averaged its
+      vertex intensities back to one per-face value and flat-filled; that algorithm is
+      now `smooth`.) Inspect with `face_vertex_intensities` / `gouraud_gradient`.
+    - `depth_sort=`: `average` (default, mean projected depth — cheap, and WRONG for
+      penetrating or cyclically overlapping faces), `newell` (the five overlap tests,
+      splitting a face by the other's plane when no order exists), `none`.
+  - `Scene3D.wireframe(box=, camera=, hidden="omit"|"dash"|"show")` — hidden-line
+    removal: each edge is clipped in screen space against the faces in front of it, so a
+    partially occluded edge is split into its VISIBLE pieces. `dash` is the drafting
+    convention. This, not `render`, is what an engineering view is.
   - Fractals (`frameforge_sdk.fractal`): an `lsystem` + `turtle` engine with
     `koch_curve`/`dragon_curve`/`sierpinski_arrowhead` presets — self-similar curves
     lowered to plain polylines.
@@ -142,7 +160,9 @@ Fluent builder:
     renderer-side SVG filter and cannot position or colour geometry in Python.
     Use sampleable noise through `run_sdk_code`; no dedicated MCP tool is needed.
   - `Frame` scales accept structured specs: `{"kind":"log","base":b}` / `{"kind":"pow","exp":e}`.
-  - `multiview(scene, box=...)` — orthographic front/top/side/iso panel grid of a `Scene3D`.
+  - `multiview(scene, box=..., wireframe=False, hidden="dash")` — orthographic
+    front/top/side/iso panel grid of a `Scene3D`; `wireframe=True` renders each panel as
+    a hidden-line drawing rather than shaded faces.
   - `Graph.render(box=...)` auto-lays-out from declared edges (`auto_layout`/`layout_kind`);
     omit `positions` and the algorithm is inferred (grid/radial/layered/spring).
   - `Graph.to_object(box=..., algorithm="auto")` emits a DECLARATIVE `type: graph`
@@ -191,6 +211,27 @@ Fluent builder:
     `split_at(points, t)` / `cut_along(ring, p1, p2)` path surgery,
     `fill_regions(shapes)` (every bounded region of an overlay as its own fillable
     face, <=8 shapes), `to_path(rings, fill=...)` to emit.
+  - Rational curves (`frameforge_sdk.curves`): NURBS, conics, and fitting. Reach here
+    when a polynomial Bezier provably cannot do the job — a cubic only *approximates*
+    a circular arc (~2.7e-4 radial error via `quarter_circle_kappa`), while a rational
+    quadratic represents it exactly for every t. Same reason a real cylinder or sphere
+    needs this rather than `bspline_patch`.
+    `circular_arc(radius=, start_angle=, sweep_angle=)` (exact, any sweep incl. 360),
+    `RationalBezier(control, weights)`, `nurbs_curve(pts, degree=)` /
+    `nurbs_surface.cylinder(radius=, height=)`, `hermite(p0, p1, tangent0=, tangent1=)`,
+    `elevate_degree(control)`, `bezier_point(control, t)` (any degree),
+    `curve_curve_intersections(a, b)` (the pair `geometry` lacks — it has only
+    line/segment x curve), and `fit_cubic(points, tolerance=)` to turn sampled points
+    back into curves.
+  - Spatial acceleration (`frameforge_sdk.spatial`): `AABBTree`, a bounding-volume
+    hierarchy over axis-aligned boxes (`insert`/`query(box)`/`pairs()`), and `Quadtree`
+    over points (`insert`/`query(box)`/`nearest(p)`/`depth()`), plus `bounds_of(points)`.
+    The broad phase for geometric queries that are otherwise quadratic — `planar`'s
+    booleans and per-face passes in `Scene3D` compared everything against everything
+    without it. Now wired into hidden-line removal and `fill_regions`, which skips any
+    subset containing two provably disjoint shapes. A broad phase may return false
+    positives but never false negatives, so results are IDENTICAL — only the work
+    changes. Pure stdlib and deterministic.
   - Stroke outlines & brushes (`frameforge_sdk.outline`): `stroke_outline(points,
     width, profile=t->scale, pen_angle=, pen_thin=, cap=, join=, smooth=True)` lowers
     a centre-line to a CLOSED filled path — constant width = outline-stroke, profile
@@ -278,6 +319,23 @@ Fluent builder:
   accessibility/overlap intent, while `containment="allowed"` explicitly consents
   to intentional bleed (and applies to a group's subtree). Also available:
   `assert_golden(...)`; `HEAD_VERSION` is the current spec version.
+- Rejections in the author's coordinates (`frameforge_sdk.explain`): `build()` still
+  raises pydantic's `ValidationError`, in the CONTRACT's coordinates
+  (`pages.0.page.layers.0.objects.0.rect.strok_width`). `explain_validation_error(err,
+  doc_or_builder)` joins that to the provenance map the builder already records and
+  returns an `ExplainedError` of `FieldProblem`s — file, line, function, the offending
+  `key`, and a did-you-mean — so the message names `my_deck.py:41 in cover_page`
+  instead of an object index. `explained(...)` wraps a build to do it in one call.
+- Named contract keys the builders never spell (`frameforge_sdk.fieldsets`): every
+  builder ends in `**fields`, so the whole contract is reachable but not NAMED —
+  nothing completes, nothing catches a typo where it is typed. These return a checked
+  fragment (a plain dict of exactly the keys you passed, validated against its contract
+  class before it is returned): `object_fields(grid_span=, matte=, outer_ring=,
+  stroke_opacity=, ...)` for the `ObjBase` keys inherited by all 35 object types,
+  `flow_fields(break_before=/break_after=/break_inside=)`, `render_output(...)` for the
+  prepress surface (crop marks, bleed, ICC profile, dpi), `rendering_contract(...)`.
+  `named_keys()` returns the roster as data. Use as `page.rect(box,
+  **object_fields(grid_span=2))`.
 
 ## Flow defaults & reserved styles (ADR-0006)
 The flow renderer injects NO undefined style — it renders only what the document
@@ -325,6 +383,11 @@ Forward (author -> render):
   in chunks: `append=true` with `allow_partial=true` on every chunk except the last. The
   whole file is capped at 2,000,000 bytes.
 - `render_frameforge_yaml` — validate + render caller-supplied YAML directly.
+- `list_deprecated_forms` / `migrate_deprecated_forms` — the contract's deprecation
+  registry, and the codemod over it. `list_deprecated_forms` answers what each retired
+  spelling became and whether it still validates; `migrate_deprecated_forms` rewrites a
+  document (or SDK client) onto the current spellings. Reach for these when a document
+  validates with deprecation warnings, rather than hand-editing the old form.
 - `get_session_resource` — read `frameforge://session/...` artifacts, transport-budgeted:
   text artifacts paginate (`offset`/`max_chars`, with `total_chars`/`next_offset`), JSON
   artifacts answer targeted `query='/rfc6901/pointer'` requests, and binary artifacts

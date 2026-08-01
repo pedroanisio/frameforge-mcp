@@ -247,6 +247,7 @@ development rather than the running server.
 | `FRAMEFORGE_MCP_PUBLISH_ROOT` | Durable root for published session deliverables; render tools accept `publish=true` and copy `document.fg.yaml`, pages, PDF, `diagnostics.json` + a sha256 manifest to `<root>/<session_id>/` (unset = publishing disabled; `publish=true` then fails fast). Must sit outside the session root; `cleanup_sessions` never touches it. |
 | `FRAMEFORGE_REAL_METRICS` | Truthy opts the shared SDK/validator/renderer default into host-bound real glyph advances (fontTools); unset means deterministic estimates, and an explicit per-call flag wins unless `font_closure` supplies stronger byte-pinned evidence. |
 | `FRAMEFORGE_MATH_SVG` | `fallback` forces the deterministic math-glyph fallback instead of node MathJax. |
+| `FRAMEFORGE_MATH_TOOLING_ROOT` | Where the Node MathJax helper lives. The engine is a library and cannot assume a fixed offset from its own source; unset, it falls back to the derived path, and a missing helper degrades to the deterministic glyph fallback. |
 | `FRAMEFORGE_CHROMIUM_NO_SANDBOX` | Truthy launches the raster Chromium with `--no-sandbox` (rootless Docker). |
 | `FRAMEFORGE_CHROMIUM_ARGS` | Replace the raster Chromium launch flags entirely (space-separated). |
 | `FRAMEFORGE_VISION_VLM_URL` | Optional VLM lane for `propose_from_image`: chat/completions endpoint (unset = lane off). |

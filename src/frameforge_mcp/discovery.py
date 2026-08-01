@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from frameforge_mcp.config import FRAMEFORGE_YAML_PATTERNS
+from frameforge_mcp.extras import availability, optional_backends
 from frameforge_mcp.security import security_posture
 
 
@@ -70,7 +71,7 @@ def _frameforge_yaml_candidates(repo_root: Path) -> list[Path]:
 # --------------------------------------------------------------------------- #
 
 _CAPABILITY_TOPICS = (
-    "flowables", "inlines", "style", "presets", "tools", "sdk", "security",
+    "flowables", "inlines", "style", "presets", "tools", "sdk", "security", "backends",
     "or a type/model name like 'rect', 'paragraph', 'document', 'page', 'canvas'",
 )
 
@@ -192,6 +193,86 @@ def _field_summary(cls: type) -> dict[str, list[str]]:
     return {"required": sorted(required), "optional": sorted(optional)}
 
 
+#: A repeated inline sub-schema is hoisted once it is at least this many bytes.
+#: Below it, a `$ref` indirection costs the reader more than the literal.
+_SHARED_MIN_BYTES = 120
+
+
+def _shared_name(node: dict[str, Any], taken: set[str]) -> str:
+    """A stable, readable name for a hoisted sub-schema."""
+    text = str(node.get("description") or node.get("title") or "")
+    words = [w.strip("'\"(),.:;").lower() for w in text.split()[:3]]
+    stem = "_".join(w for w in words if w.isalpha())
+    if not stem:
+        # No prose to name it by: describe its shape instead of emitting
+        # `schema`, `schema_2`, ... which tells a reader nothing.
+        if node.get("enum"):
+            stem = "enum"
+        elif node.get("anyOf") or node.get("oneOf"):
+            stem = "union"
+        elif isinstance(node.get("items"), dict):
+            stem = "array"
+        else:
+            stem = str(node.get("type") or "schema")
+    name, n = stem, 2
+    while name in taken:
+        name, n = f"{stem}_{n}", n + 1
+    taken.add(name)
+    return name
+
+
+def _hoist_repeats(properties: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Replace sub-schemas that occur more than once with a `$ref` into `shared`.
+
+    Same progressive-disclosure contract as `references`, applied one level down.
+    `Style` alone carries 110 properties, and most length-ish ones inline the
+    identical multi-line `Length` union — the same ~900 bytes repeated until the
+    topic blew the MCP result ceiling. Hoisting is lossless: every reference
+    resolves inside the same response, so a caller still needs exactly one call.
+    """
+    import json
+
+    counts: dict[str, int] = {}
+
+    def survey(node: Any) -> None:
+        if isinstance(node, dict):
+            blob = json.dumps(node, sort_keys=True, default=str)
+            if len(blob) >= _SHARED_MIN_BYTES:
+                counts[blob] = counts.get(blob, 0) + 1
+            for value in node.values():
+                survey(value)
+        elif isinstance(node, list):
+            for value in node:
+                survey(value)
+
+    survey(properties)
+    repeated = {blob for blob, n in counts.items() if n > 1}
+    if not repeated:
+        return properties, {}
+
+    shared: dict[str, Any] = {}
+    names: dict[str, str] = {}
+    taken: set[str] = set()
+
+    def rewrite(node: Any) -> Any:
+        if isinstance(node, dict):
+            blob = json.dumps(node, sort_keys=True, default=str)
+            if blob in repeated:
+                if blob not in names:
+                    # Register the name BEFORE rewriting the body, so a
+                    # self-similar schema cannot recurse forever.
+                    name = _shared_name(node, taken)
+                    names[blob] = name
+                    shared[name] = {k: rewrite(v) for k, v in node.items()}
+                return {"$ref": f"#/shared/{names[blob]}"}
+            return {k: rewrite(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [rewrite(v) for v in node]
+        return node
+
+    return {k: rewrite(v) for k, v in properties.items()}, shared
+
+
 def _schema_topic(key: str, cls: type, kind: str) -> dict[str, Any]:
     """A schema topic as PROGRESSIVE DISCLOSURE, not a full dump.
 
@@ -205,17 +286,25 @@ def _schema_topic(key: str, cls: type, kind: str) -> dict[str, Any]:
     """
     schema = _class_schema(cls)
     references = sorted((schema.get("$defs") or {}).keys())
-    return {
+    properties, shared = _hoist_repeats(schema.get("properties", {}))
+    note = ("compact view: `properties` are this type's own fields; "
+            "`references` lists nested types — pass one (lower-cased) as the "
+            "topic to drill in. Full JSON schema: docs/schema/frameforge-v2.schema.json.")
+    if shared:
+        note += (" Sub-schemas repeated across properties are hoisted into `shared`; "
+                 "a `{\"$ref\": \"#/shared/<name>\"}` resolves inside this response.")
+    result = {
         "ok": True,
         "topic": key,
         "kind": kind,
         "fields": _field_summary(cls),
-        "properties": schema.get("properties", {}),
+        "properties": properties,
         "references": references,
-        "note": "compact view: `properties` are this type's own fields; "
-                "`references` lists nested types — pass one (lower-cased) as the "
-                "topic to drill in. Full JSON schema: docs/schema/frameforge-v2.schema.json.",
+        "note": note,
     }
+    if shared:
+        result["shared"] = shared
+    return result
 
 
 @functools.lru_cache(maxsize=1)
@@ -272,8 +361,8 @@ def describe_capabilities(
     No ``topic`` returns a compact capability index (object types, flowable
     types, inline kinds, canvas presets, profiles, tool names, the live
     security posture). A ``topic`` of
-    ``flowables``/``inlines``/``style``/``presets``/``tools``/``security``
-    returns that catalog; any object/flowable type name (``rect``,
+    ``flowables``/``inlines``/``style``/``presets``/``tools``/``security``/
+    ``backends`` returns that catalog; any object/flowable type name (``rect``,
     ``paragraph``, ...) or model name (``document``, ``page``, ``canvas``)
     returns its JSON schema.
     """
@@ -294,6 +383,10 @@ def describe_capabilities(
             "sdk_exports": len(_sdk_surface()),
             "topics": list(_CAPABILITY_TOPICS),
             "security_posture": security_posture(),
+            # Which optional lanes this interpreter can actually run. A tool
+            # named under a false lane is uninstalled, not broken — ask the
+            # `backends` topic for the command that installs it.
+            "optional_backends": availability(),
             "source": "src/frameforge/model.py (live introspection via frameforge_sdk.model)",
         }
     if key == "tools":
@@ -316,6 +409,16 @@ def describe_capabilities(
             "exports": exports,
             "note": "introspected live from frameforge_sdk.__all__ — every export is "
                     "importable inside run_sdk_code; full signatures: docs/sdk-api.md",
+        }
+    if key == "backends":
+        return {
+            "ok": True,
+            "topic": "backends",
+            "optional_backends": optional_backends(),
+            "note": "probed live on every call — an extra installed while the server "
+                    "runs is visible to the next call; a lane reported unavailable "
+                    "means its tools return `ok: false` with the install command, "
+                    "not that they are broken",
         }
     if key == "security":
         return {
