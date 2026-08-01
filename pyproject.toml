@@ -27,7 +27,7 @@ classifiers = [
 # frameforge-sdk it is NOT a leaf and does not pretend to be one.
 dependencies = [
     "frameforge",              # the engine: render, conform, the validator
-    "frameforge-api>=1.2.0",   # the contract, imported directly by the deprecation tools
+    "frameforge-api>=1.2,<2",   # the contract, imported directly by the deprecation tools
     "frameforge-sdk[metrics]", # authoring + portable closure metrics exposed by render tools
     "mcp[cli]>=1.27,<2",
     "pydantic>=2",
