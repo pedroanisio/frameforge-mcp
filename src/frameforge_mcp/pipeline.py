@@ -24,6 +24,7 @@ from frameforge_render.provenance import sign_svg, utc_now_iso
 from frameforge_sdk.io import parse
 from frameforge_sdk.validate import validate_static_rules
 
+from frameforge_mcp import extras
 from frameforge_mcp.config import (
     DEFAULT_RASTER_MAX_PAGES,
     DEFAULT_RASTER_TIMEOUT_SECONDS,
@@ -485,7 +486,7 @@ def _export_pdf(
         summary = {
             "ok": False,
             "error": f"PDF export unavailable: {exc}",
-            "hint": "install the `pdfout` dependency group (uv sync --group pdfout) for CairoSVG + pypdf",
+            "hint": extras.install_hint("pdfout"),
         }
         return None, summary, str(summary["error"])
     writer = PdfWriter()
@@ -890,9 +891,9 @@ def _rasterize_one(
             reasons.append(str(exc))
     raise _RasterBackendUnavailable(
         "PNG rasterization unavailable (" + " / ".join(reasons) + "). The model cannot see "
-        "SVG, so this render was not visually verified — install the `browser` group and run "
-        "`uv run playwright install chromium`, or the `mcp`/`pdfout` group for the CairoSVG "
-        "fallback."
+        "SVG, so this render was not visually verified — " + extras.install_hint("browser")
+        + ". CairoSVG is a base dependency: if it is missing too, the install itself is "
+        "incomplete (`uv sync`)."
     )
 
 

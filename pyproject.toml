@@ -1,10 +1,15 @@
 [project]
 name = "frameforge-mcp"
 # The PACKAGE version, on its own release line — not the document contract
-# version (`frameforge_api.HEAD_VERSION`) and not the engine's. 1.0.0 because
-# the tool surface is not new: it is the monorepo's MCP server, extracted
-# unchanged, with 33 registered tools already in use.
-version = "1.0.0"
+# version (`frameforge_api.HEAD_VERSION`) and not the engine's. 1.0.0 was the
+# monorepo's MCP server, extracted unchanged.
+#
+# 2.0.0 because ONE behaviour changed incompatibly: file inputs to the propose /
+# measure / font-closure tools are now confined to the session root, working
+# directory, and repository unless FRAMEFORGE_MCP_INPUT_ROOTS says otherwise.
+# A deployment that read images from elsewhere must now declare where. No tool
+# was renamed or removed and no argument changed; see MIGRATION.md.
+version = "2.0.0"
 description = "The FrameForge MCP server — agent-facing author→render→verify loop, raster→vector reconstruction, and the construction coach"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,18 +41,37 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Every extra here names the DISTRIBUTION *and the extra of it* that carries the
+# backend its lane imports. Naming `frameforge-vision` bare installs the package
+# whose imports are all lazy — so the lane resolves, installs clean, and then
+# answers every call with `No module named 'cv2'`. An extra that does not
+# install what its tools import is a broken lane, not a lighter one.
+#
 # The raster→vector reconstruction lane. Its own distribution
 # (`frameforge-vision`), not a package shipped here — it is usable without an
 # MCP server or an authoring SDK, and duplicating the module name would give
-# `frameforge_vision` two homes. Optional because the propose/measure tools
-# import it lazily; the rest of the server works without it.
-vision = ["frameforge-vision>=1.0,<2"]
+# `frameforge_vision` two homes. `[cv]` is where OpenCV + Pillow live.
+vision = ["frameforge-vision[cv]>=1.0,<2"]
 # Local vision-language describer (the `describe_render` tool). CPU-runnable;
-# kept separate from `vision` because torch is heavy.
-vlm = ["torch>=2.2", "transformers>=4.46", "pillow>=10", "accelerate>=0.30", "num2words>=0.5"]
-# PDF input for propose_from_document.
-pdf = ["pymupdf>=1.24"]
+# kept separate from `vision` because torch is heavy. Delegated to the vision
+# distribution's own `vlm` extra rather than re-pinning torch/transformers here:
+# `describe_render` calls `frameforge_vision.vlm`, so that package owns the pins.
+# Floor is 1.1, not 1.0: the `vlm` extra of frameforge-vision 1.0.0 did not
+# carry torchvision, which transformers 5.x needs for the image processor of the
+# default model — so `>=1.0` would resolve to a release whose lane cannot run.
+vlm = ["frameforge-vision[vlm]>=1.1,<2"]
+# PDF input for propose_from_document — which reaches PyMuPDF *through*
+# frameforge_vision's pdf_source and then runs the CV detectors over the
+# rasterised page, so the lane needs both.
+pdf = ["frameforge-vision[cv]>=1.0,<2", "pymupdf>=1.24"]
+# PDF *output* (`to='pdf'` on the render tools, and the
+# frameforge://session/<id>/document.pdf resource): CairoSVG lowers each page and
+# pypdf concatenates them. CairoSVG is a base dependency; pypdf was declared
+# nowhere, so the advertised PDF lane could not be installed at all.
+pdfout = ["pypdf>=4"]
 # Headless Chromium raster, when the browser path is preferred over CairoSVG.
+# Needs `playwright install chromium` after the extra: a browser binary is not
+# a Python dependency and no resolver can fetch it for you.
 browser = ["playwright>=1.44"]
 
 [project.scripts]

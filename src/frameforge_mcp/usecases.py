@@ -14,13 +14,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from frameforge_mcp import extras
 from frameforge_mcp.clients import read_sdk_client as _read_client
 from frameforge_mcp.clients import write_sdk_client as _write_client
 from frameforge_mcp.config import DEFAULT_TIMEOUT_SECONDS, MAX_CODE_BYTES
 from frameforge_mcp.paths import _session_root
 from frameforge_mcp.pipeline import _validate_and_render_yaml
 from frameforge_mcp.results import _write_diagnostics
-from frameforge_mcp.security import _assert_input_path_allowed
+from frameforge_mcp.security import _assert_input_path_allowed, INPUT_ROOTS_HINT
 from frameforge_mcp.config import publish_root as config_publish_root
 from frameforge_mcp.sessions import (
     _archive_renders,
@@ -434,7 +435,7 @@ def propose_from_image(
         try:
             _assert_input_path_allowed(image_path)
         except ValueError as exc:
-            return _vision_error(str(exc))
+            return _vision_error(str(exc), hint=INPUT_ROOTS_HINT)
     try:
         from frameforge_vision.application.service import propose_from_image as _vision_propose
     except ImportError:
@@ -455,9 +456,9 @@ def propose_from_image(
 
 
 _VLM_GROUP_HINT = (
-    "the local vision describer needs the optional 'vlm' group: "
-    "`uv pip install torch transformers pillow accelerate` (CPU is fine — "
-    "the default SmolVLM-256M model is ~0.5GB). Set FG_VLM_MODEL to override."
+    "the local vision describer needs the optional `vlm` extra: "
+    + extras.install_hint("vlm")
+    + " (CPU is fine)"
 )
 
 
@@ -480,10 +481,21 @@ def describe_render(
     steer with it, then verify with compare_images / score_reconstruction / the
     validator — never treat it as the check.
     """
+    # The lane is checked before the import, not after: `frameforge_vision`
+    # itself ships with the `vlm` extra, so a torch-only install used to raise
+    # ImportError out of the tool instead of returning the install hint.
+    if not extras.lane_available("vlm"):
+        return {
+            "ok": False,
+            "advisory": True,
+            "error": extras.unavailable_error("vlm"),
+            "hint": extras.install_hint("vlm"),
+        }
     from frameforge_vision import vlm
 
     if not vlm.available():
-        return {"ok": False, "advisory": True, "error": _VLM_GROUP_HINT}
+        return {"ok": False, "advisory": True, "error": _VLM_GROUP_HINT,
+                "hint": extras.install_hint("vlm")}
     try:
         img_bytes = _resolve_image_arg(image, session_root=session_root)
     except (ValueError, FileNotFoundError) as exc:
@@ -543,7 +555,7 @@ def coach_vectorize(
     try:
         _assert_input_path_allowed(image_path)
     except ValueError as exc:
-        return _vision_error(str(exc))
+        return _vision_error(str(exc), hint=INPUT_ROOTS_HINT)
     try:
         from frameforge_coach.compose import compose_from_image
         from frameforge_sdk.io import serialize
@@ -580,7 +592,7 @@ def propose_from_document(
     try:
         _assert_input_path_allowed(path)
     except ValueError as exc:
-        return _vision_error(str(exc))
+        return _vision_error(str(exc), hint=INPUT_ROOTS_HINT)
     try:
         from frameforge_vision.application.service import propose_from_document as _vision_propose
     except ImportError:
@@ -642,7 +654,7 @@ def propose_from_svg(
         try:
             _assert_input_path_allowed(svg_path)
         except ValueError as exc:
-            return _vision_error(str(exc))
+            return _vision_error(str(exc), hint=INPUT_ROOTS_HINT)
 
     from frameforge_sdk.author import DocumentBuilder
     from frameforge_sdk.io import serialize
@@ -1647,7 +1659,7 @@ def detect_regions(
             )
         except ImportError as exc:
             return _vision_error(f"region detection backend unavailable: {exc}",
-                                 hint="install the `vision` group (OpenCV + NumPy)")
+                                 hint=extras.install_hint("vision"))
         except (ValueError, TypeError) as exc:
             return {"ok": False, "error": f"could not detect regions: {exc}",
                     "hint": "method is 'closed' | 'flat' | 'consensus'; tunables are "
@@ -1916,7 +1928,8 @@ def vectorize_image(
     try:
         from PIL import Image
     except ImportError:
-        return {"ok": False, "error": "vectorize needs Pillow (the `vision` group)",
+        return {"ok": False, "error": "vectorize needs Pillow",
+                "hint": extras.install_hint("vision"),
                 "renders": [], "resources": []}
 
     auto_meta: dict[str, Any] | None = None
@@ -2038,8 +2051,9 @@ def vectorize_image(
                 ocr_objects, ocr_status = ocr_text_objects_status(src)
                 objects = list(objects) + ocr_objects
         except ImportError as exc:
-            return {"ok": False, "error": f"vectorize backend unavailable: {exc}. "
-                    "region/outline need the `vision` group (OpenCV); trace needs the potrace binary.",
+            return {"ok": False, "error": f"vectorize backend unavailable: {exc}",
+                    "hint": extras.install_hint("vision")
+                            + " — the `trace` method additionally needs the potrace binary",
                     "renders": [], "resources": []}
         except (RuntimeError, ValueError, OSError) as exc:
             return {"ok": False, "error": f"could not vectorize: {exc}", "renders": [], "resources": []}
@@ -2250,7 +2264,7 @@ def fit_primitives(
         from frameforge_vision.domain.primitives_fit import fit_primitive
     except ImportError as exc:  # numpy missing — vision maths unavailable
         raise RuntimeError(
-            "fit_primitives needs numpy (install the 'vision' or 'mcp' extras group)"
+            f"fit_primitives needs the vision maths (numpy): {extras.install_hint('vision')}"
         ) from exc
     if not shapes:
         raise ValueError("fit_primitives needs at least one shape with points")
@@ -2552,6 +2566,9 @@ def migrate_deprecated_forms(
 
     result = migrate_document(data)
     payload: dict[str, Any] = {
+        # See list_deprecated_forms: `ok` is the one key the shared result
+        # contract guarantees, and this tool used to omit it.
+        "ok": True,
         "changed": result.changed,
         "clean": not result.manual,
         "findings": [f.as_dict() for f in result.findings],
@@ -2579,6 +2596,11 @@ def list_deprecated_forms() -> dict[str, Any]:
     from frameforge_api import CONTRACT_VERSION, deprecations
 
     return {
+        # Part of the shared result contract (frameforge_mcp.envelope): a caller
+        # branches on `ok` before reading anything else, and this tool used to
+        # omit it — leaving `ok` undefined on one of the two tools the README
+        # tells an agent to call FIRST.
+        "ok": True,
         "contract_version": CONTRACT_VERSION,
         "compatibility": "backward",
         "deprecations": deprecations.registry_json(),

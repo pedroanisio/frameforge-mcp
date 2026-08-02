@@ -20,7 +20,7 @@ needs something that can actually render.
 
 | package | what it is | imports MCP? |
 |---|---|---|
-| `frameforge_mcp` | the server, its ~33 registered tools, and (nested) `live`, the local feedback-session web UI | — |
+| `frameforge_mcp` | the server, its 35 registered tools, and (nested) `live`, the local feedback-session web UI | — |
 | `frameforge_coach` | the Vector Construction Coach — style-as-grammar, layer-order discipline, the silhouette gate | no |
 
 The raster→vector lane is **not** here: `frameforge_vision` is its own
@@ -67,6 +67,81 @@ would assert a dependency that does not exist.
   Neither tool renders, and neither touches a session; the migration does not
   mutate its input and is idempotent.
 
+## What every tool declares
+
+A host has to decide whether a call needs approval, and an agent has to decide
+whether a failed call is safe to retry. Both questions are answered in the
+protocol rather than guessed from the tool name:
+
+| Hint | Means | Example |
+|---|---|---|
+| `readOnlyHint` | does not modify its environment | `list_fonts`, `describe_capabilities`, `read_sdk_client` |
+| `destructiveHint` | may overwrite or remove existing state | every render tool — a render **resets** its session's previous pages |
+| `idempotentHint` | a repeat call changes nothing further | `cleanup_sessions` yes; `write_sdk_client` no (`append=true`) |
+| `openWorldHint` | may reach beyond this machine | only `run_sdk_code` / `run_sdk_client`, which execute untrusted Python |
+
+The table lives in `frameforge_mcp.tool_facts` and is checked against the code:
+a tool claiming `readOnlyHint` whose use case touches a filesystem-writing
+primitive fails the test suite, so the declaration cannot rot into a lie.
+
+Clients that do not surface annotations can read the same data in-band:
+
+```json
+{"tool": "describe_capabilities", "arguments": {"topic": "tools"}}
+```
+
+See [`examples/tool_declarations_call.json`](examples/tool_declarations_call.json).
+
+## The result contract
+
+Every tool but `get_guide` (which returns prose) resolves to one shape, published
+as that tool's `outputSchema` and validated by the server before the result is
+sent:
+
+```jsonc
+{
+  "ok": true,          // the only guaranteed key — branch on it first
+  "error": null,       // present when ok is false
+  "error_type": null,  // the exception class behind the failure
+  "hint": null,        // the actionable next step
+  "renders": [],       // rendered pages: page, uri, mimeType, sha256
+  "resources": []      // MCP resource links to what this call wrote
+  // ...plus whatever this tool actually returns
+}
+```
+
+Expected failures — an uninstalled lane, a bad path, a document that will not
+validate — are `ok: false` envelopes with a `hint`, never exceptions. Read the
+schema with `describe_capabilities(topic="envelope")`.
+
+## Progress and logging
+
+Long calls report. Every tool receives the MCP `Context` and emits progress
+notifications plus MCP log records around its work, so a render bounded by a
+20-second subprocess budget shows as a live operation instead of a stall. The
+same events are written to the structured JSONL audit log on disk.
+
+Tool bodies run in a worker thread. Before 2.0 they ran inline on the event
+loop, so one slow render blocked every other request — and every notification
+that would have reported it.
+
+## Where tools may read from
+
+File inputs (the `propose_*` tools, the measure/CV image arguments, and
+`font_closure` paths) are confined to the **session root, working directory, and
+repository**. The server holds your filesystem privileges; without confinement a
+steered agent could ask it for `~/.ssh/id_rsa` and get the contents into a model's
+context.
+
+```bash
+export FRAMEFORGE_MCP_INPUT_ROOTS=/mnt/assets:/workspace/fonts   # name your roots
+export FRAMEFORGE_MCP_INPUT_ROOTS='*'                            # accept any readable path
+```
+
+`describe_capabilities(topic="security")` reports the roots in force, live from
+the environment, and warns for as long as `*` is set. This default changed in
+2.0 — see [MIGRATION.md](MIGRATION.md).
+
 ## PALS's Law
 
 Every tool in this server treats model output as untrusted. Proposals are
@@ -75,14 +150,40 @@ and a signal the server cannot resolve is reported as unresolved rather than
 scored as a pass. That is the point of the render loop: an agent that cannot
 see its own output cannot correct it.
 
+The same standard applies to the server's own reporting. Progress covers what it
+can observe — that a call started and how it ended — and does not invent
+intermediate milestones it cannot see.
+
 ## Optional extras
 
 ```bash
 pip install 'frameforge-mcp[vision]'   # the frameforge-vision lane: measure, vectorize, propose
-pip install 'frameforge-mcp[vlm]'      # local CPU vision-language describer
+pip install 'frameforge-mcp[vlm]'      # local CPU vision-language describer (incl. torchvision)
 pip install 'frameforge-mcp[pdf]'      # PDF input for propose_from_document
+pip install 'frameforge-mcp[pdfout]'   # PDF output: to='pdf' + the document.pdf resource
 pip install 'frameforge-mcp[browser]'  # headless Chromium raster
 ```
+
+In a checkout the same lanes are `uv sync --extra <name>` (and `--all-extras` for
+all of them). These are **extras, not dependency groups** — `--group vision`
+is not a thing here.
+
+Each extra installs the backend its tools actually import, not just the
+distribution that wraps it: `[vision]` pulls `frameforge-vision[cv]`, so OpenCV
+and Pillow come with it. An extra that resolved but left the lane dead was
+[the bug fixed on 2026-08-01](CHANGELOG.md); `tests/test_optional_extras.py`
+now pins every extra against the modules its lane imports.
+
+Two things no resolver can do for you: `[browser]` needs
+`playwright install chromium` afterwards, and `vectorize_image(method="trace")`
+needs the `potrace` binary from your OS package manager.
+
+**Ask the server which lanes it has.** `describe_capabilities(topic="backends")`
+reports, live from the running interpreter, which extras are installed, which
+modules are missing from the rest, the tools each lane gates, and the exact
+install command. The compact capability index carries the same map under
+`optional_backends`. Any tool whose lane is absent returns `ok: false` with that
+command in `hint` — it is uninstalled, not broken.
 
 The base install includes `frameforge-sdk[metrics]` and renders through
 CairoSVG, so closure metrics and browser-free visual verification work without
@@ -96,7 +197,31 @@ in its dev group and no longer owns a second MCP implementation.
 
 See [MIGRATION.md](MIGRATION.md) and
 [`examples/font_closure_tool_call.json`](examples/font_closure_tool_call.json)
-for the portable closure call shape.
+for the portable closure call shape,
+[`examples/optional_backends_tool_call.json`](examples/optional_backends_tool_call.json)
+for the optional-lane probe and the failure envelope a missing lane returns, and
+[`examples/tool_declarations_call.json`](examples/tool_declarations_call.json)
+for the per-tool read-only/destructive/idempotent/open-world declarations and
+how to act on them.
+
+The same reports are importable, for callers that drive the loop in-process:
+
+```python
+from frameforge_mcp import lane_available, install_hint, optional_backends
+
+if not lane_available("vision"):
+    raise SystemExit(install_hint("vision"))
+optional_backends()["lanes"]["vision"]["tools"]   # what the lane unlocks
+```
+
+```python
+from frameforge_mcp import TOOL_FACTS, ToolEnvelope, security_posture
+
+TOOL_FACTS["run_sdk_code"].destructive        # True — and .writes says why
+TOOL_FACTS["list_fonts"].read_only            # True — free to call, and to repeat
+ToolEnvelope.model_validate(result)           # the contract every tool result satisfies
+security_posture()["input_roots"]["roots"]    # which paths a tool may read
+```
 
 ## Licence
 

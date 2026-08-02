@@ -57,6 +57,10 @@ from frameforge_mcp.sessions import (
     session_resource_endpoint_text,
 )
 from frameforge_mcp.logging import _logged_call, _structured_log_path
+from frameforge_mcp.envelope import ToolEnvelope
+from frameforge_mcp.progress import offload
+from frameforge_mcp.security import INPUT_ROOTS_HINT
+from frameforge_mcp.tool_facts import tool_kwargs
 from frameforge_mcp.transport import _maybe_call_tool_result
 from frameforge_mcp.util import _positive_int
 
@@ -200,11 +204,8 @@ def _tool_failure_hint(tool: str, exc: BaseException) -> str | None:
             "session ids must match [A-Za-z0-9][A-Za-z0-9_.-]{0,79}; omit session_id for the "
             "default 'session'"
         )
-    if "FRAMEFORGE_MCP_INPUT_ROOTS" in message:
-        return (
-            "the server confines input paths to FRAMEFORGE_MCP_INPUT_ROOTS; move the file "
-            "under an allowed root or adjust that variable"
-        )
+    if "FRAMEFORGE_MCP_INPUT_ROOTS" in message or "allowed input roots" in message:
+        return INPUT_ROOTS_HINT
     if "resource URI" in message or "frameforge://" in message:
         return (
             "session resource URIs look like frameforge://session/<id>/ + document.yaml | "
@@ -361,8 +362,10 @@ def create_server(
             from mcp.server.fastmcp import FastMCP as fastmcp_cls
         except ImportError as exc:
             raise RuntimeError(
-                "The FrameForge MCP server requires the optional `mcp` dependency group. "
-                "Install it with `uv sync --group mcp`."
+                "The FrameForge MCP server requires the `mcp` SDK, which is a BASE "
+                "dependency of this distribution — if it is missing, the install is "
+                "incomplete rather than missing an optional lane. Repair it with "
+                "`uv sync` (checkout) or `pip install frameforge-mcp`."
             ) from exc
 
     root = _session_root(session_root)
@@ -371,86 +374,79 @@ def create_server(
     server = fastmcp_cls(
         "FrameForge",
         instructions=(
-            "FrameForge is an agent-native visual-authoring substrate: author "
-            "documents with the Python SDK, this "
-            "server validates + renders them, and you verify against the rendered pixels. "
-            "Capabilities, by group:\n"
-            "• Author → render: run_sdk_code / run_sdk_client / render_frameforge_yaml "
-            "(build a doc, get validation issues + a PNG); write_sdk_client / "
-            "read_sdk_client / list_sdk_clients (edit whitelisted clients). The full SDK "
-            "is importable in run_sdk_code — incl. sdk.planar (Pathfinder booleans / "
-            "offset / path surgery / region fills), sdk.outline (stroke_outline width "
-            "profiles + calligraphic pen, repeat_along_path brushes), recolor + "
-            "chevreul.color_guide, ordered `effects` + multi-pass `appearance` object "
-            "fields, frameforge.patterns (375-pattern catalog, compose) and "
-            "frameforge.library (7 themes, symbol packs, honeycomb/module generators), "
-            "svg_to_objects (SVG text / .svg path / data:image/svg+xml URI → native "
-            "objects) + lower_embedded_svg (replace embedded-SVG image objects with "
-            "native groups, provenance ids), sdk.separate (deterministic collision/"
-            "label separation: apply_separation resolves the overlaps the `overlap` "
-            "audit flags in free groups / meta.no_overlap clusters; separate_rects is "
-            "the pure AABB kernel), overflow_report (typed layout-overflow signals — "
-            "clips, `overflow: visible` spill, flow lines wider than their column — "
-            "also on every render result as diagnostics.overflow), legibility_report "
-            "(typed HUMAN-READABILITY signals — type below the legible floor for the "
-            "page, WCAG 2.1 contrast failures against the ink actually painted behind "
-            "the text, untrackable measure, colliding leading — also on every render "
-            "result as diagnostics.legibility, and warned about on the render result "
-            "when a page is unreadable; a canvas unit is NOT a point, so judge type size by the "
-            "signal's reported fraction-of-page, not by the number you authored); "
-            "paint_report (typed PAINT-INTENT signals — ink the document declared that the "
-            "render did not produce: a stroke written as `style: {color,width}` VALIDATES "
-            "but is text colour / box width, so a line paints #000/1px and a polyline/path "
-            "paints NOTHING AT ALL; also on every render result as diagnostics.paint and "
-            "counted as design.unpainted, with a copy-pasteable `remedy` per signal — "
-            "an invisible shape is the one defect a screenshot cannot show you); "
-            "v0.1-dialect documents migrate via tooling/codemod.py --from-v01, and "
-            "inert stroke declarations via --fix-inert-stroke.\n"
-            "• Deprecated forms: list_deprecated_forms (the registry — what each retired "
-            "spelling became, and whether it still validates) and migrate_deprecated_forms "
-            "(rewrites them; `apply: true` returns the migrated YAML). Run these FIRST when a "
-            "document is rejected for a `stroke` or `size` key — both were removed by the "
-            "contract, so such a document can never reach a render, and the fix is "
-            "mechanical.\n"
-            "• Image → draft: propose_from_image / propose_from_document / propose_from_svg "
-            "(UNVERIFIED drafts, round-tripped through render).\n"
-            "• Visual QA: compare_images (zoomed reference|candidate|diff panels + real "
-            "NCC/RMSE/MAE metrics; align=True phase-aligns first).\n"
-            "• Coordinate-aware reconstruction (raster → precise vectors): measure_image "
-            "(grid + rulers + coordinate system + regions + landmarks + zoom crops), "
-            "mark_points (resolve points in every frame), overlay_images (landmark "
-            "alignment + offsets), workspace (a stateful pin board — the AI 'mouse': "
-            "pin / nudge / move / snap / transform / pan / zoom / checkpoint+revert, "
-            "multi-pass refine, state persists per session_id), detect_regions (what "
-            "closed/filled/stable regions does an image contain — exact bbox/centroid/"
-            "fill/polygon per region, three methods + shape clustering), construct_vectors "
-            "(draw SDK geometry from anchor points), vectorize_image (AUTO trace: auto / "
-            "region / outline / trace(potrace) / layers; fill_mode='gradient' fits exact "
-            "user-space gradient fills from the source, 'shading' adds contour-following "
-            "rim bands, thresholds=[...] stacks luminance levels, supersample=2..3 traces "
-            "AA edges subpixel), refine_reconstruction (visibility-aware descent: refit "
-            "every paint on its VISIBLE pixels against the source — run it after any "
-            "vectorize), score_reconstruction (NUMERIC convergence: "
-            "how far the drawn vectors sit from the source's edges — on_edge_frac / "
-            "mean_dist, complements compare_images), map_coordinates (homography / 2D↔3D / "
-            "warp image rectification).\n"
-            "• Fonts/type: BEFORE choosing a font_family, call list_fonts to enumerate "
-            "the families fontconfig can resolve (pass a family to check what it ACTUALLY "
-            "resolves to — resolves.exact=false is a SILENT substitution to a default "
-            "face). Do NOT assume families cannot be enumerated and fall back to generic "
-            "serif/sans-serif stacks — those collapse the rendered type. match_font ranks "
-            "resolvable families by shape similarity to a reference crop; fit_text returns "
-            "the matching measured advance plus a line-breaker-safe fit_width before you "
-            "assign positioned text geometry.\n"
-            "• Sessions/resources: artifacts live at frameforge://session/<id>/... "
-            "(document.yaml, page/<n>.svg, page/<n>.png, diagnostics.json, workspace.json).\n"
-            "ARCHITECTURAL CONTRACT (PALS's Law): all CV/LLM output is unverified by "
-            "default — verify every result against the rendered PNG, never the YAML alone. "
-            "Call the `frameforge_guide` prompt for the full SDK + workflow reference."
+            # A CONNECTION PREAMBLE, not a manual. It is sent to every client on
+            # every connection, before the agent has asked for anything, so it
+            # buys only what an agent cannot recover on its own: the loop, the
+            # rules whose violation is silent, and where the real reference is.
+            # The SDK tour that used to live here is served on demand by
+            # `get_guide` / the `frameforge_guide` prompt. Keeping it short is
+            # also a security posture: instructions and tool descriptions are
+            # injected verbatim into the model's context.
+            "FrameForge is an agent-native visual-authoring substrate: author documents "
+            "with the Python SDK, this server validates + renders them, and you verify "
+            "against the rendered pixels.\n\n"
+            "START HERE\n"
+            "• describe_capabilities() — the capability index. Topics: `sdk`, `tools` "
+            "(what each tool does to your environment), `envelope` (the result shape), "
+            "`security` (which paths are readable), `backends` (which optional lanes "
+            "this server has), plus any type name (`rect`, `paragraph`) for its schema. "
+            "Look fields up here instead of iterating on validation errors.\n"
+            "• get_guide() — the full SDK + workflow reference (also the "
+            "`frameforge_guide` prompt, for clients that surface prompts).\n\n"
+            "RULES WHOSE VIOLATION IS SILENT\n"
+            "• Fonts: call list_fonts BEFORE choosing a font_family. An unresolvable "
+            "family is SUBSTITUTED without an error and collapses the rendered type.\n"
+            "• Deprecated forms: if a document is rejected for a `stroke` or `size` key, "
+            "run list_deprecated_forms / migrate_deprecated_forms FIRST. Both spellings "
+            "were removed by the contract, so such a document can never reach a render, "
+            "and the rewrite is mechanical.\n"
+            "• Typed diagnostics ride on every render result — `diagnostics.overflow` "
+            "(clipped/spilling layout), `diagnostics.legibility` (WCAG contrast, type "
+            "below the legible floor), `diagnostics.paint` (ink the document declared "
+            "that the render did not produce). An invisible shape and an unreadable "
+            "page are the defects a screenshot cannot show you: read the signals.\n"
+            "• A tool whose optional lane is absent returns ok:false with the install "
+            "command in `hint` — it is UNINSTALLED, not broken. Install it rather than "
+            "working around it.\n\n"
+            "CONTRACTS\n"
+            "• Every tool result carries `ok`; branch on it first. Expected failures are "
+            "ok:false envelopes with `error` and an actionable `hint`, never exceptions. "
+            "Schema: describe_capabilities(topic='envelope').\n"
+            "• Every tool declares whether it is read-only, destructive, idempotent, and "
+            "open-world, as MCP annotations and via describe_capabilities(topic='tools'). "
+            "Renders RESET their session's previous pages.\n"
+            "• File inputs are confined to the session root, working directory, and "
+            "repository unless FRAMEFORGE_MCP_INPUT_ROOTS says otherwise.\n"
+            "• Artifacts live at frameforge://session/<id>/... (document.yaml, "
+            "page/<n>.svg, page/<n>.png, diagnostics.json, workspace.json).\n\n"
+            "PALS's LAW: all CV/VLM output is unverified by default — verify every "
+            "result against the rendered PNG, never the YAML alone."
         ),
     )
 
-    @server.tool()
+    def _reporting_tool(name: str, *, structured: bool = True):
+        """Register a synchronous tool body as an async, reported, annotated MCP tool.
+
+        One registrar instead of 35 hand-written decorator argument lists. It
+        carries the three declarations a bare ``@server.tool()`` left unstated:
+
+        * the environmental contract from :mod:`frameforge_mcp.tool_facts`, so a
+          host can gate approval on read-only vs destructive;
+        * the offload to a worker thread with progress + MCP log notifications,
+          so a slow render neither blocks the event loop nor goes silent;
+        * the result contract from :mod:`frameforge_mcp.envelope`, published as
+          ``outputSchema`` and enforced by FastMCP on every call.
+
+        ``structured=False`` is for a tool that returns prose instead of an
+        envelope — currently only ``get_guide``.
+        """
+        def decorator(fn):
+            wrapped = offload(fn, name, result_model=ToolEnvelope if structured else None)
+            return server.tool(**tool_kwargs(name))(wrapped)
+
+        return decorator
+
+    @_reporting_tool("list_deprecated_forms")
     def list_deprecated_forms():
         """List every DEPRECATED FrameForge form and the current spelling that replaces it.
 
@@ -465,7 +461,7 @@ def create_server(
             lambda: _enveloped("list_deprecated_forms", _uc_list_deprecated_forms),
         ))
 
-    @server.tool()
+    @_reporting_tool("migrate_deprecated_forms")
     def migrate_deprecated_forms(
         yaml_text: Annotated[str, Field(description=_DESC_MIGRATE_YAML)],
         apply: Annotated[bool, Field(description=_DESC_MIGRATE_APPLY)] = False,
@@ -488,7 +484,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("list_sdk_clients")
     def list_sdk_clients():
         """List editable Python SDK clients under the configured safe roots."""
         return _plain_tool_result(_logged_call(
@@ -501,7 +497,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("read_sdk_client")
     def read_sdk_client(
         path: Annotated[str, Field(description=_DESC_CLIENT_PATH)],
     ):
@@ -516,7 +512,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("write_sdk_client")
     def write_sdk_client(
         path: Annotated[str, Field(description=_DESC_CLIENT_PATH)],
         code: Annotated[
@@ -566,7 +562,7 @@ def create_server(
                 old_string=old_string, new_string=new_string, repo_root=repo, edit_roots=edit_roots)),
         ))
 
-    @server.tool()
+    @_reporting_tool("run_sdk_client")
     def run_sdk_client(
         path: Annotated[str, Field(description=_DESC_CLIENT_PATH)],
         session_id: Annotated[str | None, Field(description=_DESC_SESSION_ID)] = None,
@@ -649,7 +645,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("run_sdk_code")
     def run_sdk_code(
         code: Annotated[
             str,
@@ -727,7 +723,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("render_frameforge_yaml")
     def render_frameforge_yaml(
         yaml_text: Annotated[
             str,
@@ -802,7 +798,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("design_audit")
     def design_audit(
         session_id: Annotated[str | None, Field(description=_DESC_SESSION_ID)] = None,
     ):
@@ -843,7 +839,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("propose_from_image")
     def propose_from_image(
         image_path: Annotated[
             str | None, Field(description="Filesystem path to the source image. Provide this or image_base64.")
@@ -886,7 +882,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("describe_render")
     def describe_render(
         image: Annotated[str, Field(description=_DESC_VLM_IMAGE)],
         question: Annotated[str | None, Field(description=_DESC_VLM_QUESTION)] = None,
@@ -910,7 +906,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("coach_vectorize")
     def coach_vectorize(
         image_path: Annotated[str, Field(description="Filesystem path to the source image (line-art or illustration).")],
         style: Annotated[str, Field(description=_DESC_COACH_STYLE)] = "children_book",
@@ -952,7 +948,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("propose_from_document")
     def propose_from_document(
         path: Annotated[str, Field(description="Filesystem path to the source PDF.")],
         page: Annotated[int, Field(description="1-based PDF page number to rasterize and analyze.")] = 1,
@@ -998,7 +994,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("propose_from_svg")
     def propose_from_svg(
         svg_path: Annotated[
             str | None, Field(description="Filesystem path to a .svg file. Provide this or svg_text.")
@@ -1059,7 +1055,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("compare_images")
     def compare_images(
         reference: Annotated[
             str,
@@ -1124,7 +1120,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("measure_image")
     def measure_image(
         image: Annotated[
             str,
@@ -1205,7 +1201,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("mark_points")
     def mark_points(
         image: Annotated[
             str,
@@ -1268,7 +1264,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("overlay_images")
     def overlay_images(
         base: Annotated[
             str,
@@ -1325,7 +1321,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("workspace")
     def workspace(
         action: Annotated[
             str,
@@ -1416,7 +1412,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("construct_vectors")
     def construct_vectors(
         shapes: Annotated[
             list[dict],
@@ -1469,7 +1465,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("score_reconstruction")
     def score_reconstruction(
         image: Annotated[
             str,
@@ -1534,7 +1530,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("map_coordinates")
     def map_coordinates(
         mode: Annotated[
             str,
@@ -1593,7 +1589,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("vectorize_image")
     def vectorize_image(
         image: Annotated[
             str,
@@ -1663,7 +1659,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("refine_reconstruction")
     def refine_reconstruction(
         session_id: Annotated[str, Field(description="Session whose generated.fg.yaml holds the reconstruction to refine (e.g. a prior vectorize_image session).")],
         image: Annotated[str, Field(description="The reference/source image the reconstruction targets: a filesystem path, frameforge:// URI, or data: URI. Must match the page canvas pixel-for-pixel.")],
@@ -1697,7 +1693,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("detect_regions")
     def detect_regions(
         image: Annotated[
             str,
@@ -1763,7 +1759,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("fit_primitives")
     def fit_primitives(
         shapes: Annotated[
             list[dict],
@@ -1794,7 +1790,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("diff_renders")
     def diff_renders(
         session_id: Annotated[str | None, Field(description=_DESC_SESSION_ID)] = None,
         reference_rev: Annotated[
@@ -1839,7 +1835,7 @@ def create_server(
         )
         return _maybe_call_tool_result(result)
 
-    @server.tool()
+    @_reporting_tool("fit_text")
     def fit_text(
         text: Annotated[str, Field(description="Literal text to measure before assigning a box.")],
         font_family: Annotated[
@@ -1880,7 +1876,7 @@ def create_server(
                 font_closure, font_generics),
         ))
 
-    @server.tool()
+    @_reporting_tool("match_font")
     def match_font(
         reference: Annotated[
             str,
@@ -1934,7 +1930,7 @@ def create_server(
             lambda: _live_guide(repo_root=repo),
         )
 
-    @server.tool()
+    @_reporting_tool("get_guide", structured=False)
     def get_guide() -> str:
         """Return the FrameForge capability guide — the same text as the `frameforge_guide` prompt.
 
@@ -1949,7 +1945,7 @@ def create_server(
             lambda: _live_guide(repo_root=repo),
         )
 
-    @server.tool()
+    @_reporting_tool("describe_capabilities")
     def describe_capabilities(
         topic: Annotated[str | None, Field(description=_DESC_TOPIC)] = None,
     ):
@@ -1975,7 +1971,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("list_fonts")
     def list_fonts(
         family: Annotated[
             str | None,
@@ -2008,7 +2004,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("get_session_resource")
     def get_session_resource(
         uri: Annotated[
             str,
@@ -2050,7 +2046,7 @@ def create_server(
             ),
         ))
 
-    @server.tool()
+    @_reporting_tool("list_sessions")
     def list_sessions():
         """List per-session scratch directories with their artifact counts and size."""
         return _plain_tool_result(_logged_enveloped_call(
@@ -2060,7 +2056,7 @@ def create_server(
             lambda: _uc_list_sessions(session_root=root),
         ))
 
-    @server.tool()
+    @_reporting_tool("cleanup_sessions")
     def cleanup_sessions(
         session_ids: Annotated[
             list[str] | None,

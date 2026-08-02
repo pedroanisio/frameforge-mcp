@@ -115,7 +115,7 @@ def compose_from_image(
     """Ingest ``image`` and compose a styled coach document (lazy OpenCV).
 
     ``style`` may be a name, several names (hybrid), or a resolved StyleProfile.
-    Raises ``RuntimeError`` if the optional vision group (OpenCV) is absent.
+    Raises ``RuntimeError`` if the optional `vision` extra (OpenCV) is absent.
     """
     from frameforge_coach.ingest import ingest
 

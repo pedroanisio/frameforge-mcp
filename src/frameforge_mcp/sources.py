@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from frameforge_mcp import extras as _extras
 from frameforge_mcp.config import DEFAULT_TIMEOUT_SECONDS
 from frameforge_mcp.discovery import _frameforge_yaml_snapshot, _new_generated_yaml
 from frameforge_mcp.execution import (
@@ -40,18 +41,19 @@ from frameforge_mcp.security import (
 from frameforge_mcp.sessions import _prepare_session, _reset_session_inputs, _session_id
 from frameforge_sdk.provenance import PROVENANCE_ENV
 
+# Both strings come from the lane table (:mod:`frameforge_mcp.extras`) so the
+# command a failing tool prints is the command that installs it. They used to be
+# hand-written here and named a `vision` dependency *group* — which this
+# distribution does not have, so following the hint produced a second error.
 _VISION_GROUP_HINT = (
-    "The vision proposal lane needs the optional `vision` dependency group. "
-    "Install it with `uv sync --group vision` (or launch the MCP server with "
-    "`--group vision`)."
+    "The vision proposal lane needs the optional `vision` extra — "
+    + _extras.install_hint("vision")
+    + "."
 )
 
 # The install instruction split out of the message, matching the shared envelope
 # shape (`error` = what failed, `hint` = the actionable next step).
-_VISION_INSTALL_HINT = (
-    "install the optional `vision` dependency group: `uv sync --group vision` "
-    "(or launch the MCP server with `--group vision`)"
-)
+_VISION_INSTALL_HINT = _extras.install_hint("vision")
 
 
 def _vision_error(message: str, *, hint: str | None = None) -> dict[str, Any]:
@@ -65,7 +67,7 @@ def _vision_error(message: str, *, hint: str | None = None) -> dict[str, Any]:
         "ok": False, "error": message, "proposal": None, "renders": [], "resources": [],
     }
     if hint is None and message == _VISION_GROUP_HINT:
-        envelope["error"] = "the optional `vision` dependency group is not installed"
+        envelope["error"] = _extras.unavailable_error("vision")
         hint = _VISION_INSTALL_HINT
     if hint:
         envelope["hint"] = hint

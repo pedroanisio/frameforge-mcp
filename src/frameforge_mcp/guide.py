@@ -515,6 +515,16 @@ difference between "it rendered" and "it is readable".
   or `connector` with the same mistake is painted `#000`/1px instead of vanishing,
   which is why it survives review. `validate` reports the static half of this as
   `inert-stroke-declaration` before you ever render.
+- `diagnostics.overflow` — typed LAYOUT-OVERFLOW signals: content clipped by its
+  frame, spill from `overflow: visible`, and flow lines wider than the column
+  they run in. A page can render, look plausible in a thumbnail, and still be
+  losing text off the edge of a box.
+
+Each of the three has a standalone SDK entry point, so you can ask before you
+render rather than reading it back off a result: `overflow_report(doc)`,
+`legibility_report(doc)`, and `paint_report(doc)` return the same typed signals
+that ride on every render result as `diagnostics.overflow`,
+`diagnostics.legibility`, and `diagnostics.paint`.
 - `render_warning` — the same findings in one line, plus text-fit losses,
   `collapsed_line_breaks` (an authored `\n` collapsed because `white_space` is
   `normal` — set `pre-wrap` to keep the rows), and font substitutions.

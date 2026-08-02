@@ -2,7 +2,7 @@
 
 This is the seam that joins the two halves of the session: the vision/vectorize
 lane (raster → FrameForge objects) and the coach's style grammar (objects →
-on-brand look). ``ingest`` lazily imports OpenCV (the ``vision`` group) so the
+on-brand look). ``ingest`` lazily imports OpenCV (the ``vision`` extra) so the
 rest of ``frameforge_coach`` stays importable without it; ``recolor_to_style``
 and ``gradientize`` are pure, geometry-preserving transforms — unit-testable
 with no extra deps.
@@ -21,17 +21,22 @@ _FILL_TYPES = {"polygon", "rect", "ellipse", "circle", "path"}
 
 def ingest(image: str, *, mode: str = "outline", colors: int = 8, detail: float = 0.0016,
            min_area: float = 24.0, max_dim: int = 1500) -> tuple[list[Obj], int, int]:
-    """Vectorize a raster into FrameForge objects (lazy OpenCV import; ``vision`` group).
+    """Vectorize a raster into FrameForge objects (lazy OpenCV import; ``vision`` extra).
 
     ``mode="outline"`` returns open stroke paths (the line-art); ``mode="region"``
     returns closed, fillable polygons. Returns ``(objects, width, height)``. Raises a
-    clear error if the vision group is not installed.
+    clear error if the vision extra is not installed.
     """
     try:
         from frameforge_vision.infrastructure.vectorize import raster_to_objects
-    except ImportError as exc:  # pragma: no cover - depends on optional group
+    except ImportError as exc:  # pragma: no cover - depends on the optional extra
+        # The command is spelled out rather than taken from
+        # `frameforge_mcp.extras`: the coach's stated boundary is
+        # "frameforge_sdk + stdlib only", and it has consumers that never
+        # install the server. `tests/test_optional_extras.py` guards the text.
         raise RuntimeError(
-            "coach.ingest needs the vision group: `uv sync --group vision`"
+            "coach.ingest needs the optional `vision` extra: `uv sync --extra vision` "
+            "(or `pip install 'frameforge-mcp[vision]'`)"
         ) from exc
     return raster_to_objects(image, mode=mode, colors=colors, detail=detail,
                              min_area=min_area, max_dim=max_dim)

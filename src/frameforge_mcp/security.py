@@ -103,23 +103,94 @@ def _display_path(path: Path, repo_root: Path) -> str:
     return resolved.as_posix()
 
 
-def _assert_input_path_allowed(path: str) -> None:
-    """Confine propose inputs to ``FRAMEFORGE_MCP_INPUT_ROOTS`` when it is set.
+#: The explicit opt-out. Set ``FRAMEFORGE_MCP_INPUT_ROOTS`` to this to accept any
+#: readable path — the pre-2.0 behaviour, now something a deployment has to ask for.
+INPUT_ROOTS_UNRESTRICTED = "*"
 
-    Unset (the default) preserves the open localhost-dev behavior: any readable
-    path is accepted. Setting the env var to a ``os.pathsep``-joined list of roots
-    locks the propose tools to those directories so the server cannot be used as a
-    confused-deputy file reader in a hardened deployment.
+#: The remediation for a confinement refusal. Shared, because the propose tools
+#: build their own envelope (``sources._vision_error``) rather than going through
+#: ``server._error_envelope`` — so a hint written in only one of the two places
+#: leaves the most likely post-2.0 failure with no route forward.
+INPUT_ROOTS_HINT = (
+    "file inputs are confined by default (session root, working directory, repository) "
+    "so the server cannot be steered into reading arbitrary files; call "
+    "describe_capabilities(topic='security') to see the roots in force, move the file "
+    "under one of them, or set FRAMEFORGE_MCP_INPUT_ROOTS for this deployment"
+)
+
+
+def default_input_roots() -> list[Path]:
+    """Where the propose/measure tools may read from when nothing is configured.
+
+    Three roots, each earning its place from how the tools are actually used:
+
+    * the **session root**, because chaining tools means reading back the PNG a
+      previous render just wrote;
+    * the **working directory**, because an agent driving a project refers to
+      that project's own reference images, usually by relative path;
+    * the **repository root**, because the SDK clients and example assets the
+      server is pointed at live there.
+
+    What this deliberately excludes is everything else on the machine — the
+    dotfiles, key material, and credential stores that a confused deputy with
+    the user's privileges would otherwise happily read into a model's context.
+    """
+    # Imported here: paths.py reads the environment on every call, and importing
+    # it at module scope would freeze the session root at import time.
+    from frameforge_mcp.paths import get_default_repo_root, get_default_session_root
+
+    roots: list[Path] = []
+    for candidate in (get_default_session_root(), Path.cwd(), get_default_repo_root()):
+        try:
+            resolved = Path(candidate).expanduser().resolve()
+        except OSError:  # pragma: no cover - unresolvable cwd on a deleted dir
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _configured_input_roots() -> tuple[str, list[Path]]:
+    """``(source, roots)`` for the current environment.
+
+    ``source`` is ``"environment"``, ``"default"``, or ``"unrestricted"`` — the
+    posture report needs to say not just *what* is enforced but *why*.
     """
     configured = os.environ.get("FRAMEFORGE_MCP_INPUT_ROOTS")
-    if not configured:
-        return
-    roots = [Path(entry).expanduser().resolve() for entry in configured.split(os.pathsep) if entry]
+    if configured is None or not configured.strip():
+        return "default", default_input_roots()
+    entries = [entry for entry in configured.split(os.pathsep) if entry]
+    if any(entry.strip() == INPUT_ROOTS_UNRESTRICTED for entry in entries):
+        return "unrestricted", []
+    roots = [Path(entry).expanduser().resolve() for entry in entries]
     if not roots:
+        return "default", default_input_roots()
+    return "environment", roots
+
+
+def _assert_input_path_allowed(path: str) -> None:
+    """Confine a tool's file input to the allowed roots.
+
+    **Confined by default.** Before 2.0 an unset ``FRAMEFORGE_MCP_INPUT_ROOTS``
+    accepted any readable path, which made the propose tools a confused-deputy
+    file reader: an agent that could be steered into naming ``~/.ssh/id_rsa``
+    would pull it into the model's context, using the user's own privileges to
+    do it. Openness is now something a deployment asks for by setting the
+    variable to ``*``; the default is the safe posture.
+    """
+    source, roots = _configured_input_roots()
+    if source == "unrestricted":
         return
     resolved = Path(path).expanduser().resolve()
-    if not any(_is_relative_to(resolved, root) for root in roots):
-        raise ValueError("input path is outside the allowed FRAMEFORGE_MCP_INPUT_ROOTS")
+    if any(_is_relative_to(resolved, root) for root in roots):
+        return
+    allowed = ", ".join(str(root) for root in roots) or "(none)"
+    raise ValueError(
+        f"input path is outside the allowed input roots ({allowed}). Move the file "
+        "under one of them, add its directory to FRAMEFORGE_MCP_INPUT_ROOTS "
+        f"({os.pathsep!r}-joined), or set FRAMEFORGE_MCP_INPUT_ROOTS="
+        f"{INPUT_ROOTS_UNRESTRICTED!r} to accept any readable path"
+    )
 
 
 def security_posture() -> dict[str, Any]:
@@ -132,21 +203,17 @@ def security_posture() -> dict[str, Any]:
     :func:`_client_roots`, the code-execution subprocess) so the report can
     never drift from what is actually enforced.
     """
-    configured = os.environ.get("FRAMEFORGE_MCP_INPUT_ROOTS")
-    input_roots = (
-        [Path(entry).expanduser().resolve() for entry in configured.split(os.pathsep) if entry]
-        if configured
-        else []
-    )
-    # Empty-after-split matches _assert_input_path_allowed: no roots = open.
-    input_mode = "restricted" if input_roots else "open"
+    source, input_roots = _configured_input_roots()
+    input_mode = "open" if source == "unrestricted" else "restricted"
 
     warnings: list[str] = []
     if input_mode == "open":
         warnings.append(
-            "propose-input confinement is OFF (localhost-dev default): the propose_* "
-            "tools accept any readable path; set FRAMEFORGE_MCP_INPUT_ROOTS to a "
-            f"{os.pathsep!r}-joined list of roots to restrict them"
+            "propose-input confinement is OFF: FRAMEFORGE_MCP_INPUT_ROOTS is set to "
+            f"{INPUT_ROOTS_UNRESTRICTED!r}, so the propose_* tools accept ANY readable "
+            "path — anything the server process can read can reach the model's "
+            "context. Unset the variable to restore the confined default, or name "
+            f"the roots explicitly as a {os.pathsep!r}-joined list"
         )
     keep_env = _truthy_env("FRAMEFORGE_MCP_KEEP_ENV")
     if keep_env:
@@ -158,8 +225,10 @@ def security_posture() -> dict[str, Any]:
     return {
         "input_roots": {
             "mode": input_mode,
+            "source": source,
             "roots": [str(root) for root in input_roots],
             "env_var": "FRAMEFORGE_MCP_INPUT_ROOTS",
+            "unrestricted_value": INPUT_ROOTS_UNRESTRICTED,
         },
         "edit_roots": [str(root) for root in _client_roots(_repo_root(None), None)],
         "code_execution": {

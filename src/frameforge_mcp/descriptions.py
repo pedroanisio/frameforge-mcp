@@ -104,9 +104,12 @@ _DESC_FONT_GENERICS = (
 )
 _DESC_TOPIC = (
     "Optional capability topic: omit for the compact index (object types, flowable types, inline "
-    "kinds, canvas presets, profiles, tools); or one of 'flowables' | 'inlines' | 'style' | "
-    "'presets' | 'tools'; or a type/model name ('rect', 'paragraph', 'document', 'page', "
-    "'canvas') for its live JSON schema."
+    "kinds, canvas presets, profiles, tools, optional-backend availability); or one of "
+    "'flowables' | 'inlines' | 'style' | 'presets' | 'tools' | 'security' | 'backends'; or a "
+    "type/model name ('rect', 'paragraph', 'document', 'page', 'canvas') for its live JSON "
+    "schema. 'backends' reports which optional extras (vision / vlm / pdf / browser) are "
+    "installed, which tools each one gates, and the exact command that installs a missing one — "
+    "ask it FIRST when a CV or describe tool answers `ok: false`."
 )
 _DESC_REGION_METHOD = (
     "Detection method: 'closed' (purely topological enclosed faces — any line art: floor plans, "

@@ -1,0 +1,75 @@
+{
+  "_": "Ask the running server what each tool does to your environment BEFORE calling it. The same four booleans ride on `tools/list` as MCP annotations (readOnlyHint / destructiveHint / idempotentHint / openWorldHint); this topic serves them in-band for clients that do not surface annotations, and for an agent deciding whether a failed call is safe to retry.",
+  "tool": "describe_capabilities",
+  "arguments": {
+    "topic": "tools"
+  },
+  "expected": {
+    "ok": true,
+    "topic": "tools",
+    "tools": [
+      "<every registered tool name>"
+    ],
+    "declarations": {
+      "schema": "frameforge_mcp.tool_facts.v1",
+      "hint_semantics": {
+        "read_only": "the call does not modify its environment",
+        "destructive": "the call may overwrite or remove pre-existing state",
+        "idempotent": "repeating the call with the same arguments changes nothing further",
+        "open_world": "the call may interact with entities outside this machine"
+      },
+      "tools": {
+        "list_fonts": {
+          "title": "List resolvable fonts",
+          "read_only": true,
+          "destructive": false,
+          "idempotent": true,
+          "open_world": false,
+          "writes": []
+        },
+        "render_frameforge_yaml": {
+          "title": "Render FrameForge YAML",
+          "read_only": false,
+          "destructive": true,
+          "idempotent": true,
+          "open_world": false,
+          "writes": [
+            "resets this session's page-*.svg / p*.png and diagnostics.json"
+          ]
+        },
+        "run_sdk_code": {
+          "title": "Run SDK code",
+          "read_only": false,
+          "destructive": true,
+          "idempotent": false,
+          "open_world": true,
+          "writes": [
+            "executes untrusted Python in an un-sandboxed subprocess",
+            "resets this session's page-*.svg / p*.png and diagnostics.json"
+          ]
+        },
+        "cleanup_sessions": {
+          "title": "Clean up sessions",
+          "read_only": false,
+          "destructive": true,
+          "idempotent": true,
+          "open_world": false,
+          "writes": [
+            "permanently deletes session scratch directories"
+          ]
+        }
+      }
+    },
+    "note": "each tool declares whether it is read-only, destructive, idempotent, and open-world — the same values published as MCP tool annotations"
+  },
+  "how_to_read_it": [
+    "read_only:true — free to call, and free to call again; this is what makes the discovery tools the cheap first step.",
+    "destructive:true — the call may destroy state you still want. Every render tool is destructive because it RESETS its session's previous pages: only the last call's artifacts remain.",
+    "idempotent:false — a retry is NOT free. run_sdk_code executes arbitrary Python; write_sdk_client with append=true adds more text each time.",
+    "open_world:true — only the two code-execution tools. Everything else renders locally and reaches nothing beyond this machine."
+  ],
+  "related": {
+    "envelope": "describe_capabilities(topic='envelope') — the shape every tool result satisfies, published as each tool's outputSchema and validated by the server before the result is sent",
+    "security": "describe_capabilities(topic='security') — which filesystem roots the propose/measure tools may read"
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "_": "Ask the running server which optional lanes it has before using a tool from one. Every gated tool returns the same `install` command as the `hint` of its ok:false envelope.",
+  "tool": "describe_capabilities",
+  "arguments": {
+    "topic": "backends"
+  },
+  "expected": {
+    "ok": true,
+    "topic": "backends",
+    "optional_backends": {
+      "distribution": "frameforge-mcp",
+      "packaging": "extras",
+      "lanes": {
+        "vision": {
+          "summary": "raster\u2192vector reconstruction and coordinate-aware measurement: the classical CV lane (OpenCV + NumPy) behind frameforge-vision",
+          "available": "<bool \u2014 probed live in the server's interpreter>",
+          "probes": [
+            "frameforge_vision",
+            "cv2",
+            "numpy",
+            "PIL"
+          ],
+          "missing": "<modules that could not be resolved; empty when available>",
+          "install": "uv sync --extra vision",
+          "pip_install": "pip install 'frameforge-mcp[vision]'",
+          "post_install": null,
+          "tools": [
+            "propose_from_image",
+            "propose_from_svg",
+            "compare_images",
+            "measure_image",
+            "mark_points",
+            "overlay_images",
+            "workspace",
+            "construct_vectors",
+            "detect_regions",
+            "fit_primitives",
+            "score_reconstruction",
+            "map_coordinates",
+            "vectorize_image",
+            "refine_reconstruction",
+            "match_font",
+            "coach_vectorize"
+          ]
+        },
+        "vlm": {
+          "summary": "the local vision-language describer (CPU-runnable; ADVISORY output, never a measurement)",
+          "available": "<bool \u2014 probed live in the server's interpreter>",
+          "probes": [
+            "frameforge_vision",
+            "torch",
+            "transformers",
+            "PIL"
+          ],
+          "missing": "<modules that could not be resolved; empty when available>",
+          "install": "uv sync --extra vlm",
+          "pip_install": "pip install 'frameforge-mcp[vlm]'",
+          "post_install": "the default SmolVLM-256M model (~0.5GB) downloads on first use; set FG_VLM_MODEL to override",
+          "tools": [
+            "describe_render"
+          ]
+        },
+        "pdf": {
+          "summary": "PDF input for propose_from_document (PyMuPDF page rasterisation)",
+          "available": "<bool \u2014 probed live in the server's interpreter>",
+          "probes": [
+            "frameforge_vision",
+            "fitz"
+          ],
+          "missing": "<modules that could not be resolved; empty when available>",
+          "install": "uv sync --extra pdf",
+          "pip_install": "pip install 'frameforge-mcp[pdf]'",
+          "post_install": null,
+          "tools": [
+            "propose_from_document"
+          ]
+        },
+        "pdfout": {
+          "summary": "PDF export: the `to='pdf'` option of the render tools and the frameforge://session/<id>/document.pdf resource (CairoSVG + pypdf)",
+          "available": "<bool \u2014 probed live in the server's interpreter>",
+          "probes": [
+            "cairosvg",
+            "pypdf"
+          ],
+          "missing": "<modules that could not be resolved; empty when available>",
+          "install": "uv sync --extra pdfout",
+          "pip_install": "pip install 'frameforge-mcp[pdfout]'",
+          "post_install": null,
+          "tools": []
+        },
+        "browser": {
+          "summary": "headless-Chromium raster, when the browser path is preferred over CairoSVG (highest CSS fidelity: filters, blend modes, masks)",
+          "available": "<bool \u2014 probed live in the server's interpreter>",
+          "probes": [
+            "playwright"
+          ],
+          "missing": "<modules that could not be resolved; empty when available>",
+          "install": "uv sync --extra browser",
+          "pip_install": "pip install 'frameforge-mcp[browser]'",
+          "post_install": "playwright install chromium",
+          "tools": []
+        }
+      }
+    }
+  },
+  "then": {
+    "_": "A lane reported unavailable is uninstalled, not broken. Run its `install` command, then re-ask this topic \u2014 availability is probed on every call, so a running server sees the new install immediately.",
+    "example_failure_envelope": {
+      "tool": "detect_regions",
+      "result": {
+        "ok": false,
+        "error": "the optional `vision` extra is not installed",
+        "hint": "install the optional `vision` extra: `uv sync --extra vision` (or `pip install 'frameforge-mcp[vision]'`)",
+        "renders": [],
+        "resources": []
+      }
+    }
+  }
+}

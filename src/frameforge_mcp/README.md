@@ -6,19 +6,45 @@ server **validates and renders** the generated FrameForge document, and returns 
 artifacts (validation issues, SVG, and a PNG the model can actually *see*) so the
 output can be verified — never trusted blind (PALS's Law).
 
-> The MCP boundary is optional. The core SDK and renderers never import it unless
-> `frameforge_mcp.create_server()` is called; its dependencies live in the `mcp`
-> dependency group. See [codebase-standards.md](../../../docs/codebase-standards.md) §13.
+> The MCP boundary is optional to the *family*: the core SDK and renderers never
+> import it unless `frameforge_mcp.create_server()` is called. Within THIS
+> distribution the `mcp` SDK is a base dependency — a plain install runs the
+> server.
 
 ## Run it
 
 ```bash
-uv sync --group mcp                       # installs mcp[cli] + cairosvg (raster fallback)
-uv run --group mcp python -m frameforge_mcp
+uv sync                                   # base install: mcp[cli] + cairosvg (raster)
+uv run python -m frameforge_mcp
 # or:
 make mcp                                  # same, over the default FastMCP transport
 make live                                 # local web UI over the same session functions
 ```
+
+### Optional lanes
+
+Everything above works from a base install. The lanes below ship as **extras** of
+this distribution — `--extra <name>`, never `--group <name>`; an extra installs the
+backend its tools import, so a lane is either fully usable or reported unavailable
+with the command that fixes it.
+
+| Extra | Install | Unlocks |
+|---|---|---|
+| `vision` | `uv sync --extra vision` | the whole CV lane: `propose_from_*`, `compare_images`, `measure_image`, `mark_points`, `overlay_images`, `workspace`, `construct_vectors`, `detect_regions`, `fit_primitives`, `score_reconstruction`, `map_coordinates`, `vectorize_image`, `refine_reconstruction`, `match_font`, `coach_vectorize` |
+| `vlm` | `uv sync --extra vlm` | `describe_render` (local VLM; needs torchvision — transformers 5.x requires it for the image processor — and the ~0.5GB SmolVLM-256M downloads on first use, `FG_VLM_MODEL` overrides) |
+| `pdf` | `uv sync --extra pdf` | `propose_from_document` (PDF **input**) |
+| `pdfout` | `uv sync --extra pdfout` | `to='pdf'` on the render tools + the `document.pdf` session resource (PDF **output**) |
+| `browser` | `uv sync --extra browser` + `playwright install chromium` | headless-Chromium raster instead of CairoSVG |
+
+Consumers of the published distribution use the same names:
+`pip install 'frameforge-mcp[vision]'`. `uv sync --all-extras` installs every lane.
+
+**Ask the server, do not guess:** `describe_capabilities(topic="backends")` reports
+which lanes are installed in the running interpreter, which modules are missing from
+the rest, which tools each one gates, and the exact install command. The compact
+capability index carries the same availability map under `optional_backends`. A tool
+whose lane is absent returns `ok: false` with that command in `hint` — uninstalled,
+not broken.
 
 ## Tools & resources
 
@@ -27,8 +53,14 @@ Discovery (look up, don't guess):
 - `describe_capabilities` — LIVE introspection of the document model (`src/frameforge/model.py`
   via `frameforge.sdk.model`): no topic returns the capability index (object types, flowable
   types, inline kinds, canvas presets, profiles, tool names); a topic of
-  `flowables`/`inlines`/`style`/`presets`/`tools` returns that catalog; a type/model name
-  (`rect`, `paragraph`, `document`, `page`, `canvas`) returns its fields + JSON schema.
+  `flowables`/`inlines`/`style`/`presets`/`tools`/`envelope`/`security`/`backends` returns that
+  catalog; a type/model name (`rect`, `paragraph`, `document`, `page`, `canvas`) returns its
+  fields + JSON schema.
+  - `tools` also carries `declarations` — per tool, whether it is read-only, destructive,
+    idempotent, and open-world, plus a `writes` list naming what a non-read-only call touches.
+    Same values as the MCP annotations on `tools/list`, for clients that do not surface them.
+  - `envelope` returns the JSON Schema every tool result satisfies.
+  - `security` returns the live filesystem posture — which input roots are in force and why.
 - `list_fonts` — the font families fontconfig can resolve (`fc-list`), with an optional
   `family` resolution check (`fc-match`) that catches silent substitution before a render,
   plus the session document's pinned `defs.tokens.fonts`. Degrades to a structured error with
@@ -44,7 +76,7 @@ Forward (author → render):
   unique in the file) as an alternative to re-sending the whole `code`.
 
 Render options (all three render tools): `to='pdf'` additionally assembles the rendered pages
-into a vector `document.pdf` via CairoSVG + pypdf (the `pdfout` group; the CLI `--to pdf`
+into a vector `document.pdf` via CairoSVG + pypdf (the `pdfout` extra; the CLI `--to pdf`
 mechanism), reported under `result.pdf` and as a session resource. `to='html'` additionally
 writes a self-contained `document.html` (the CLI `--to html` mechanism, via
 `frameforge.conform.render_html`): semantic shell, inline SVG artwork, hoisted palette + text-style
@@ -64,7 +96,7 @@ reports, and `fit_text`. Results include `result.metrics_mode == 'closure'`,
 report) persisted into the session's `diagnostics.json` — nothing the renderer drops or
 substitutes is silent.
 
-Inverse (image / PDF / SVG → draft), needs the `vision` group:
+Inverse (image / PDF / SVG → draft), needs the `vision` extra (`propose_from_document` also needs `pdf`):
 
 - `propose_from_image` / `propose_from_document` — propose a **draft** document from a
   screenshot or rasterized PDF page, then round-trip it through validate + render. The
@@ -72,7 +104,7 @@ Inverse (image / PDF / SVG → draft), needs the `vision` group:
 - `propose_from_svg` — ingest an existing SVG's elements as FrameForge objects (1:1
   vector lowering, no raster step), optionally recoloured by region, then validate + render.
 
-Visual QA (reference vs. recreation), needs Pillow (`vision` or `render` group):
+Visual QA (reference vs. recreation), needs the `vision` extra:
 
 - `compare_images` — crop matching regions from a **reference** and a **candidate** and lay
   them out `reference | candidate | difference` (bright red = mismatch), each crop scaled up
@@ -107,8 +139,8 @@ Measure + reconstruct (raster → reliable coordinates, for vector recreation), 
   landmarks (`L*`) are UNVERIFIED CV hints (PALS's Law).
 
 Coordinate workspace + reconstruction (the AI's precise pointer), needs the `vision`
-group (Pillow + numpy; `score_reconstruction` needs numpy, `vectorize_image` needs
-OpenCV and — for `trace` — the potrace binary):
+extra (Pillow + numpy + OpenCV; `vectorize_image`'s `trace` method additionally needs
+the potrace binary, which no extra can install for you):
 
 - `workspace` — a **stateful** pin board bound to one image, persisted per `session_id`
   (`workspace.json`). Actions: `open`, `pin` (points in any frame; may reference existing
@@ -196,7 +228,8 @@ warning, install a backend, and re-render.
 - A non-zero build puts a bounded `stderr_tail` in the model-facing summary, so the
   traceback is visible without a second fetch of the diagnostics resource. The summary
   also surfaces `hint`, `pdf`, and `replaced_renders` whenever they are present, and
-  vision-group import failures carry the install command as a separate `hint`.
+  a missing optional lane carries the install command as a separate `hint`
+  (sourced from `frameforge_mcp.extras`, so the hint is the command that works).
 - A schema-invalid SDK build returns root-cause-grouped `error_groups` plus
   `issues_total` / `groups_total`. Each group carries the nearest authoring
   `file:line:function`, a representative path/message, and a known-helper hint when
@@ -230,7 +263,7 @@ development rather than the running server.
 | `FRAMEFORGE_REPO` | Where the standalone `frameforge-sdk` looks for this engine's `tooling/validate.py`. Read by `frameforge_sdk.validate` when the engine is not pip-installed (an uninstalled checkout); unset, it resolves through the installed `frameforge` package and raises `EngineUnavailable` if neither is found. |
 | `FRAMEFORGE_MCP_SESSION_ROOT` | Where per-session scratch dirs/artifacts live (default: `frameforge-mcp-sessions` under the system temp dir). |
 | `FRAMEFORGE_MCP_EDIT_ROOTS` | `os.pathsep`-joined roots the client-file tools may read/write (default: `static/examples`). |
-| `FRAMEFORGE_MCP_INPUT_ROOTS` | Confine `propose_*` inputs and `font_closure` paths to these roots (unset = any readable path). Relative closure paths resolve from the document/client base directory. |
+| `FRAMEFORGE_MCP_INPUT_ROOTS` | Confine `propose_*` inputs, measure/CV image arguments, and `font_closure` paths to these roots. **Unset = the session root, working directory, and repository** (changed in 2.0; it used to mean *any readable path*). Set to `*` to accept any readable path. Relative closure paths resolve from the document/client base directory. |
 | `FRAMEFORGE_MCP_KEEP_ENV` | Truthy keeps secret-looking env vars in the code subprocess (default: stripped). |
 | `FRAMEFORGE_SDK_PROVENANCE` | Set `0`/`false`/`off` to disable author-site capture in MCP SDK subprocesses (default: enabled there; disabled for ordinary SDK use). |
 | `FRAMEFORGE_MCP_STRUCT_LOG_PATH` | Path for the JSONL structured tool log (default: under the session root). |
@@ -271,7 +304,26 @@ package, and are documented in [docker/README.md](../../../docker/README.md).
 secret-looking env vars stripped, a wall-clock timeout, and hard input ceilings. This is
 **process isolation, not a security sandbox**: the code still runs with the server user's
 filesystem and network access. Run the server only for local, trusted use — do not expose
-it to untrusted callers.
+it to untrusted callers. Both tools declare this in the protocol:
+`readOnlyHint: false`, `destructiveHint: true`, `openWorldHint: true`.
+
+**File inputs are confined by default.** The `propose_*` tools, the measure/CV image
+arguments, and `font_closure` paths may read only from the session root, the working
+directory, and the repository. Before 2.0 an unset `FRAMEFORGE_MCP_INPUT_ROOTS` accepted
+any readable path, which made the server a confused-deputy file reader: an agent steered
+into naming `~/.ssh/id_rsa` would pull it into the model's context using the operator's
+own privileges. Name your roots explicitly for a deployment whose assets live elsewhere,
+or set `FRAMEFORGE_MCP_INPUT_ROOTS=*` to restore the old behaviour — visibly, with a
+warning in `security_posture()` for as long as it is set.
+
+Ask the running server rather than reading this file:
+
+```json
+{"tool": "describe_capabilities", "arguments": {"topic": "security"}}
+```
+
+`security_posture()` re-derives everything from the environment on every call, so the
+report can never drift from what is actually enforced.
 
 ---
 

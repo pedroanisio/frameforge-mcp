@@ -24,7 +24,9 @@ from typing import Any
 
 from frameforge_mcp.config import FRAMEFORGE_YAML_PATTERNS
 from frameforge_mcp.extras import availability, optional_backends
+from frameforge_mcp.envelope import envelope_report
 from frameforge_mcp.security import security_posture
+from frameforge_mcp.tool_facts import tool_facts_report
 
 
 def _frameforge_yaml_snapshot(repo_root: Path) -> dict[Path, str]:
@@ -72,6 +74,7 @@ def _frameforge_yaml_candidates(repo_root: Path) -> list[Path]:
 
 _CAPABILITY_TOPICS = (
     "flowables", "inlines", "style", "presets", "tools", "sdk", "security", "backends",
+    "envelope",
     "or a type/model name like 'rect', 'paragraph', 'document', 'page', 'canvas'",
 )
 
@@ -390,7 +393,26 @@ def describe_capabilities(
             "source": "src/frameforge/model.py (live introspection via frameforge_sdk.model)",
         }
     if key == "tools":
-        return {"ok": True, "topic": "tools", "tools": sorted(tool_names or [])}
+        # The declarations also ride on `tools/list` as MCP annotations, but not
+        # every client surfaces those — and an agent deciding whether a failed
+        # call is safe to retry needs `idempotent` in-band, not in a field of the
+        # protocol frame it never sees.
+        return {
+            "ok": True,
+            "topic": "tools",
+            "tools": sorted(tool_names or []),
+            "declarations": tool_facts_report(),
+            "note": "each tool declares whether it is read-only, destructive, idempotent, "
+                    "and open-world — the same values published as MCP tool annotations",
+        }
+    if key == "envelope":
+        return {
+            "ok": True,
+            "topic": "envelope",
+            "envelope": envelope_report(),
+            "note": "the shape every tool result satisfies — published as each tool's "
+                    "outputSchema and validated by the server before the result is sent",
+        }
     if key == "sdk":
         # Compact: name + module + the first sentence of the docstring. The full
         # signatures (239 exports) are 60KB — over the result ceiling; they live

@@ -15,11 +15,15 @@ contract package's to test.
 from __future__ import annotations
 
 import pytest
-
-yaml = pytest.importorskip("yaml")
-
+import yaml
 from frameforge_api import DEPRECATIONS
+from pydantic import ValidationError
+
 from frameforge_mcp.usecases import list_deprecated_forms, migrate_deprecated_forms
+
+# `yaml` is imported outright, not via `importorskip`: PyYAML is a BASE
+# dependency of this distribution, so skipping on its absence would hide a
+# broken install behind a green run.
 
 LEGACY = """
 dsl: FrameForge
@@ -113,7 +117,10 @@ def test_the_input_document_is_rejected_before_migration():
     true: this document cannot reach a render on its own."""
     from frameforge_api import Document
 
-    with pytest.raises(Exception):
+    # The precise type matters: `Exception` would also pass if the fixture
+    # stopped being loadable, or if `Document` moved and raised ImportError —
+    # neither of which is "the contract rejects this document".
+    with pytest.raises(ValidationError, match="stroke is paint-only"):
         Document.model_validate(yaml.safe_load(LEGACY))
 
 
