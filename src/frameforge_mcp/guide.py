@@ -336,6 +336,13 @@ Fluent builder:
   prepress surface (crop marks, bleed, ICC profile, dpi), `rendering_contract(...)`.
   `named_keys()` returns the roster as data. Use as `page.rect(box,
   **object_fields(grid_span=2))`.
+- The SDK's own taxonomy, as data (`frameforge_sdk.tiers`): `frameforge_sdk.__all__`
+  is 358 names in one flat namespace, which is a decision cost before it is anything
+  else. This module layers that surface — `CORE` is the entry set an author meets
+  first and can go a long way on; the rest opens up by area. Prefer it to scanning
+  the flat `__all__` when deciding what to reach for, and note that this guide's
+  prose and the tiers data are the same taxonomy stated twice — the data is the one a
+  program can read.
 
 ## Flow defaults & reserved styles (ADR-0006)
 The flow renderer injects NO undefined style — it renders only what the document
@@ -406,7 +413,7 @@ Forward (author -> render):
   publish root. `publish=true` with the root unset fails fast (nothing renders).
 
 Render options (the three render tools): `to='pdf'` additionally assembles the rendered
-pages into a vector `document.pdf` (needs the `pdfout` group; reported under `result.pdf`
+pages into a vector `document.pdf` (needs the `pdfout` extra; reported under `result.pdf`
 and as the `frameforge://session/<id>/document.pdf` resource). `to='html'` additionally
 writes a self-contained `document.html` — semantic shell, inline SVG artwork, the
 document's own palette hoisted to `:root` custom properties, named text styles as
@@ -455,11 +462,21 @@ visual render; the result reports `signed: {applied, timestamp}`.
 A vision model can only *see* a raster (PNG), not SVG. The render tools therefore
 rasterize to PNG by default (`raster_png=True`) and attach the PNG as an image
 content block; the SVG is kept as a resource link. Rasterization prefers headless
-Chromium (`browser` group + `playwright install chromium`, highest CSS fidelity)
-and falls back to CairoSVG (browser-free; `mcp`/`pdfout` group) so a PNG is
-produced even without a browser; each render reports the `backend` it used. Only
-when *neither* backend is available does the result carry a `render_warning` and
-ship SVG/diagnostics text alone — read the warning, install a backend, re-render.
+Chromium (the `browser` extra + `playwright install chromium`, highest CSS
+fidelity) and falls back to CairoSVG (browser-free; a BASE dependency, so it is
+always there in a healthy install) so a PNG is produced even without a browser;
+each render reports the `backend` it used. Only when *neither* backend is
+available does the result carry a `render_warning` and ship SVG/diagnostics text
+alone — read the warning, install a backend, re-render.
+
+Optional capability generally: this distribution ships EXTRAS (`vision`, `vlm`,
+`pdf`, `pdfout`, `browser`) — `uv sync --extra <name>` or
+`pip install 'frameforge-mcp[<name>]'`, never `--group <name>`. Call
+`describe_capabilities(topic="backends")` to see which lanes the running server
+actually has, which tools each gates, and the command that installs a missing
+one; every lane-gated tool also returns that command as the `hint` of its
+`ok: false` envelope. A tool listed under an unavailable lane is uninstalled,
+not broken — do not work around it, install it.
 
 Inverse (image/document -> author):
 - `propose_from_image` — classical OpenCV/numpy detectors (+ an optional VLM lane)
