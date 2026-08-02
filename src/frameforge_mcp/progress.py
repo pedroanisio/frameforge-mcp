@@ -71,6 +71,20 @@ async def _progress(ctx: Any, value: float, message: str) -> None:
     await _notify(getattr(ctx, "report_progress", None), value, _TOTAL, message)
 
 
+def _envelope_of(result: Any) -> dict[str, Any] | None:
+    """The tool's envelope, whether it was returned bare or inside a content wrapper.
+
+    The render family wraps its envelope in a ``CallToolResult`` so the rendered
+    PNG can ride along as an image content block; the plain tools return the
+    dict. Reading only the bare form meant every *failed* render was reported as
+    a success, because the wrapper has no ``ok`` of its own.
+    """
+    if isinstance(result, dict):
+        return result
+    structured = getattr(result, "structuredContent", None)
+    return structured if isinstance(structured, dict) else None
+
+
 def _outcome(result: Any) -> tuple[str, str]:
     """(log level, suffix) for a completed call, read off the shared envelope.
 
@@ -78,8 +92,9 @@ def _outcome(result: Any) -> tuple[str, str]:
     path, a document that will not validate. It is still a failure, and logging
     it at ``info`` beside the successes is how an operator misses it.
     """
-    if isinstance(result, dict) and result.get("ok") is False:
-        detail = str(result.get("error") or "failed")
+    envelope = _envelope_of(result)
+    if envelope is not None and envelope.get("ok") is False:
+        detail = str(envelope.get("error") or "failed")
         return "warning", f"failed: {detail}"
     return "info", "complete"
 

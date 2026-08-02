@@ -31,9 +31,15 @@ classifiers = [
 # engine, and verifies against the result. Unlike frameforge-api and
 # frameforge-sdk it is NOT a leaf and does not pretend to be one.
 dependencies = [
-    "frameforge",              # the engine: render, conform, the validator
+    # Bounded like every other family edge. This was the one runtime dependency
+    # with no constraint at all, so a published frameforge-mcp would have
+    # accepted a future major of the engine without review.
+    "frameforge>=2.9,<3",      # the engine: render, conform, the validator
     "frameforge-api>=1.2,<2",   # the contract, imported directly by the deprecation tools
-    "frameforge-sdk[metrics]", # authoring + portable closure metrics exposed by render tools
+    # Floor is 1.1, not 1.0: the SDK 1.1.0 release is what added
+    # `explain_validation_error` and `fieldsets`, and the MCP error surface
+    # reports authoring sites through them.
+    "frameforge-sdk[metrics]>=1.1,<2",  # authoring + portable closure metrics
     "mcp[cli]>=1.27,<2",
     "pydantic>=2",
     "pyyaml>=6",
