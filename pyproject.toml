@@ -99,11 +99,31 @@ dev = [
 # The family is published on GitHub, not on a package index. DEV-ONLY: uv drops
 # `tool.uv.sources` when building the wheel, so the published artifact declares
 # plain requirements.
+#
+# Two rules, both learned from a resolution that actually failed:
+#
+#  1. Intra-family sources are git URLs, NEVER relative paths. uv reads this
+#     table when another project resolves THIS one from git, and rewrites
+#     `path = "../x"` into `git+<this repo>#subdirectory=../x`, which cannot
+#     exist. One `path` entry here made a clean clone of the ENGINE unresolvable.
+#
+#  2. There is NO entry for `frameforge`. The engine's own dev group depends on
+#     this package, so in that resolution `frameforge` is the root project — a
+#     path (editable) source by construction. Any URL declared for it here is a
+#     second, conflicting URL for the same package and uv rejects the graph
+#     ("Requirements contain conflicting URLs for package `frameforge`"). The
+#     requirement in [project.dependencies] stays; only the source is absent, and
+#     the consuming resolution supplies the engine.
+#
+# Consequence, stated plainly: `uv lock` in a standalone clone of THIS repo
+# cannot resolve `frameforge>=2.9` — nothing in the family is on an index, and
+# PyPI's `frameforge` is an unrelated 0.0.1 stub. Publishing the family (or
+# pointing this block at a private index) is what closes it. Until then, develop
+# this repo from the engine's checkout, where `uv sync` installs it as the root.
 [tool.uv.sources]
-frameforge-api = { path = "../frameforge-api", editable = true }
-frameforge = { path = "../frameforge", editable = true }
-frameforge-vision = { path = "../frameforge-vision", editable = true }
-frameforge-sdk = { path = "../frameforge-sdk", editable = true }
+frameforge-api = { git = "https://github.com/pedroanisio/frameforge-api" }
+frameforge-vision = { git = "https://github.com/pedroanisio/frameforge-vision" }
+frameforge-sdk = { git = "https://github.com/pedroanisio/frameforge-sdk" }
 
 [build-system]
 requires = ["hatchling"]
