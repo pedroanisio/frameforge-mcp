@@ -189,6 +189,34 @@ The base install includes `frameforge-sdk[metrics]` and renders through
 CairoSVG, so closure metrics and browser-free visual verification work without
 another extra.
 
+## Developing this repository from a standalone clone
+
+`uv sync` here cannot resolve `frameforge>=2.9` on its own, and the reason is
+worth stating rather than hiding: this package's `[tool.uv.sources]` declares
+**no** source for the engine. It cannot. The engine's own dev group depends on
+`frameforge-mcp`, so in *that* resolution `frameforge` is the root project — a
+path source by construction — and a second URL for it declared here makes uv
+reject the whole graph ("Requirements contain conflicting URLs for package
+`frameforge`"). One entry here is enough to make a clean clone of the engine
+uninstallable, which is what it did until 2026-08-03.
+
+Nothing in the family is on a package index yet, so until it is published
+(PyPI's `frameforge` is an unrelated 0.0.1 stub), resolve the engine locally —
+build the family once and lock against the directory:
+
+```bash
+for pkg in frameforge frameforge-api frameforge-sdk frameforge-render frameforge-vision frameforge-fonts; do
+  (cd ../$pkg && uv build --wheel -o ../_wheels)
+done
+uv lock --find-links ../_wheels   # do NOT commit this lock: it pins a local path
+uv sync --find-links ../_wheels
+```
+
+The committed `uv.lock` still records the pre-2026-08-03 path resolution and is
+stale by construction; the same `--find-links` set regenerates a working one.
+Day to day the loop is simpler: develop from the engine's checkout, where
+`uv sync` installs this package from git and the engine as the root project.
+
 ## Provenance
 
 Since the 2026-08-01 cutover this repository is the MCP source of truth. The
